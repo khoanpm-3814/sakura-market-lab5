@@ -1,0 +1,552 @@
+{
+  "epic": "E09",
+  "title": "Báo cáo & xuất CSV kế toán",
+  "f_ids": ["F-028", "F-029", "F-030"],
+  "summary": "12 báo cáo cố định (RPT 01〜09 theo ngày, RPT 10〜12 theo tháng / quy tắc) có quyền theo mã báo cáo, xem + xuất CSV có audit, job dựng bản chụp báo cáo ngày trước 11:00 JST; xuất CSV kế toán theo batch cho 業務日 đã 締め (1 batch hợp lệ / ngày, đếm lượt tải, signed URL 60 giây).",
+  "issues": [
+    {
+      "key": "E09-01",
+      "title": "Viết registry báo cáo: danh mục 12 mã, quyền theo vai trò và validate bộ lọc",
+      "discipline": "BE",
+      "description": "Module server dùng chung cho RPT-01 / 02 / 03 và JOB-05: danh mục rpt01〜rpt12 (tên, tần suất, loại ngày / tháng), bảng quyền theo vai trò (hợp quyền khi nhiều vai trò), schema bộ lọc riêng từng báo cáo (bắt buộc, mẫu L- / X-, khoảng tháng ≤ 12, from ≤ to, bỏ qua tham số không thuộc báo cáo). Mỗi truy vấn báo cáo đăng ký vào registry theo cùng một interface (count, rows phân trang, totals, cursor).",
+      "acceptance": [
+        "ROLE-003 chỉ rpt02, ROLE-004 chỉ rpt04, ROLE-007 / 008 chỉ rpt12, ROLE-005 / 010 / 011 cả 12 mã; người có 2 vai trò được hợp quyền",
+        "Mã ngoài rpt01〜rpt12 → M_15; thiếu bộ lọc bắt buộc → M_01; sai mẫu → M_04 / M_08; khoảng tháng 13 → M_RPT_06; from > to → M_09",
+        "rpt06 chấp nhận biz_date hoặc batch_code, thiếu cả hai → M_01",
+        "Unit test phủ bảng quyền 7 vai trò × 12 mã"
+      ],
+      "spec_refs": ["RPT-01", "RPT-02", "RPT-03", "DD-F028-report-build", "SCR-032"],
+      "hours": 8,
+      "hours_basis": "Bảng quyền 7 × 12 + 15 tham số lọc với luật riêng theo báo cáo; không có I/O ngoài DB.",
+      "priority": "must",
+      "depends_on": ["E00-07", "E00-08"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E09-02",
+      "title": "Viết tính readiness báo cáo ngày và API RPT-01 danh mục",
+      "discipline": "BE",
+      "description": "Hàm đọc business_days + job_runs (daily_report_build, biz_date) trả 4 trạng thái not_locked / ready / building / failed theo mốc 11:00 JST ngày kế tiếp; RPT-01 trả danh mục được phép theo vai trò + readiness của biz_date (mặc định ngày 締め済 lớn nhất).",
+      "acceptance": [
+        "Ngày 開 hoặc không có trong lịch → not_locked (M_RPT_02)",
+        "Có lượt 成功 → ready + finished_at; 実行中 / chưa chạy trước 11:00 → building (M_RPT_01); 失敗 hoặc ≥ 11:00 chưa 成功 → failed (M_RPT_03)",
+        "Vai trò ngoài 7 vai trò → 403 M_19; biz_date sai định dạng → 400 M_08"
+      ],
+      "spec_refs": ["RPT-01", "DD-F028-report-build", "TBL-business_days", "TBL-job_runs", "FN-common-getBusinessDay"],
+      "hours": 4,
+      "hours_basis": "1 hàm 4 nhánh trạng thái theo mốc giờ + 1 route đọc bọc registry.",
+      "priority": "must",
+      "depends_on": ["E09-01", "E00-10", "E00-05a"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E09-03",
+      "title": "Viết truy vấn báo cáo ngày RPT 01〜09",
+      "discipline": "BE",
+      "description": "Mỗi báo cáo là 1 truy vấn chỉ đọc đăng ký vào registry E09-01, dùng chung cho RPT-02 (xem), RPT-03 (CSV) và JOB-05 (bản chụp). Giá trị giao dịch luôn là giá trị hiệu lực (gốc + reverse / delta, ADR-004). Cột trả về theo bảng nguồn của RPT-02.",
+      "acceptance": ["Mọi sub-issue xong"],
+      "spec_refs": ["RPT-02", "DD-F028-report-build", "ADR-004"],
+      "hours": null,
+      "hours_basis": "Issue cha — tổng giờ nằm ở sub-issue.",
+      "priority": "must",
+      "depends_on": ["E09-01"],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E09-03a",
+          "title": "Viết truy vấn RPT 01 tổng hợp giao dịch ngày và RPT 02 lô × giao dịch",
+          "discipline": "BE",
+          "description": "RPT 01: theo kind (相対 / せり) đếm 確定 / 取消, Σ amount hiệu lực, số đã giao xong / chưa giao, tổng số lô. RPT 02: lô của ngày join giao dịch, lọc lot_no (khớp chính xác) và trạng thái nhiều giá trị.",
+          "acceptance": [
+            "Giao dịch có phiếu điều chỉnh 承認 hiện số tiền sau delta ở RPT 01",
+            "totals tính trên toàn kết quả, không theo trang",
+            "RPT 02 lọc status '確定,取消' trả đúng 2 trạng thái"
+          ],
+          "spec_refs": ["RPT-02", "FN-trade-sett_trade_effective", "TBL-trades", "TBL-lots", "TBL-deliveries"],
+          "hours": 8,
+          "hours_basis": "2 truy vấn, 1 có gom nhóm + đếm giao hàng, 1 có join và lọc nhiều trạng thái.",
+          "priority": "must",
+          "depends_on": ["E09-01", "E00-02d", "E00-02e"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E09-03b",
+          "title": "Viết truy vấn RPT 03 tư cách sắp hết hạn và RPT 04 giao hàng tồn / ngoại lệ",
+          "discipline": "BE",
+          "description": "RPT 03: người tham gia + kỳ hiệu lực, trạng thái 失効 / 失効間近 (N = threshold_value của eligibility_expiring, mặc định 30) / 一時停止 / 再審査, số ngày còn lại. RPT 04: 2 khối — giao dịch chưa giao xong (số còn lại, số ngày tồn) và ngoại lệ giao hàng của ngày, lọc exception_type.",
+          "acceptance": [
+            "失効間近 = 有効 và valid_to trong N ngày; đổi N ở notification_settings đổi kết quả",
+            "RPT 04 trả 2 mảng backlog / exceptions trong cùng response, mỗi mảng có totals riêng"
+          ],
+          "spec_refs": ["RPT-02", "TBL-participants", "TBL-eligibility_periods", "TBL-delivery_exceptions", "TBL-deliveries", "TBL-notification_settings"],
+          "hours": 8,
+          "hours_basis": "2 truy vấn, RPT 04 có 2 khối dữ liệu và chỉ số phái sinh số ngày.",
+          "priority": "must",
+          "depends_on": ["E09-01", "E00-02b", "E00-02e"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E09-03c",
+          "title": "Viết truy vấn RPT 05 đối soát ngày và RPT 06 batch kế toán",
+          "discipline": "BE",
+          "description": "RPT 05: dòng business_days + số liệu đối soát (dùng lại closing_summary) + Σ settlement_lines theo tax_category × line_kind. RPT 06: dòng batch kế toán theo biz_date (mặc định batch hợp lệ 作成済 / ダウンロード済) hoặc batch_code, kèm net / tax / gross tổng.",
+          "acceptance": [
+            "Số liệu RPT 05 khớp CLS-02 cùng ngày",
+            "RPT 06 theo biz_date không có batch hợp lệ → rows rỗng; theo batch_code của batch 無効 vẫn xem được kèm batch_status"
+          ],
+          "spec_refs": ["RPT-02", "FN-closing-closing_summary", "TBL-business_days", "TBL-settlement_lines", "TBL-accounting_export_batches", "TBL-accounting_export_lines"],
+          "hours": 8,
+          "hours_basis": "2 truy vấn, RPT 05 gộp chéo tax_category × line_kind, RPT 06 có 2 cách chọn batch.",
+          "priority": "must",
+          "depends_on": ["E09-01", "E06-01a", "E00-02g"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E09-03d",
+          "title": "Viết truy vấn RPT 07 thưởng theo kỳ và RPT 08 điều chỉnh / mở khóa",
+          "discipline": "BE",
+          "description": "RPT 07: theo target_period — người tham gia, billed / paid_on_time, 完納, bậc, danh sách phiên bản từ rule_version_id của parts, tiền thưởng, Σ delta ghi vào kỳ. RPT 08: phiếu điều chỉnh ghi sổ ngày (booked_biz_date) với giá trị trước / sau + delta, và các lần mở khóa của ngày; lọc actor_id.",
+          "acceptance": [
+            "Kỳ có đổi quy tắc giữa tháng hiện 2 phiên bản trong cột versions",
+            "RPT 08 actor_id khớp requested_by / decided_by / unlocked_by"
+          ],
+          "spec_refs": ["RPT-02", "TBL-incentive_periods", "TBL-incentive_lines", "TBL-incentive_line_parts", "TBL-incentive_deltas", "TBL-correction_requests", "TBL-trade_adjustments"],
+          "hours": 8,
+          "hours_basis": "2 truy vấn nhiều bảng (4 bảng thưởng; phiếu + delta + mở khóa) với gom mảng phiên bản.",
+          "priority": "must",
+          "depends_on": ["E09-01", "E00-02f", "E00-02d"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E09-03e",
+          "title": "Viết truy vấn RPT 09 tranh chấp và SLA",
+          "discipline": "BE",
+          "description": "Danh sách tranh chấp lọc trạng thái (mặc định 未対応,対応中), số ngày đã qua, is_overdue theo due_date; khối summary đếm theo trạng thái, overdue_count, sla_rate.",
+          "acceptance": [
+            "is_overdue = chưa 解決済 / 取下げ và hôm nay JST > due_date",
+            "sla_rate tính trên tranh chấp đã kết thúc trong khoảng lọc, không chia cho 0"
+          ],
+          "spec_refs": ["RPT-02", "TBL-disputes"],
+          "hours": 4,
+          "hours_basis": "1 bảng nguồn, 3 chỉ số phái sinh.",
+          "priority": "must",
+          "depends_on": ["E09-01", "E00-02e"],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E09-04",
+      "title": "Viết truy vấn báo cáo tháng / quy tắc RPT 10〜12",
+      "discipline": "BE",
+      "description": "Báo cáo theo khoảng tháng (≤ 12) và báo cáo phiên bản quy tắc. Tháng trước go-live đọc bảng legacy; khoảng vắt qua go-live trộn 2 nguồn, mỗi dòng có data_source.",
+      "acceptance": ["Mọi sub-issue xong"],
+      "spec_refs": ["RPT-02", "DD-F028-report-build", "DD-F036-migration-rehearsal-reconcile"],
+      "hours": null,
+      "hours_basis": "Issue cha — tổng giờ nằm ở sub-issue.",
+      "priority": "must",
+      "depends_on": ["E09-01"],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E09-04a",
+          "title": "Viết helper mốc go-live và tách khoảng tháng theo nguồn dữ liệu",
+          "discipline": "BE",
+          "description": "Đọc data_to_date của migration_runs run_type 本番 status 合格 làm mốc go-live; chia [month_from, month_to] thành phần legacy và phần hệ thống mới; chưa có lượt 合格 → toàn bộ là hệ thống mới. Trả notice M_RPT_05 khi có tháng legacy.",
+          "acceptance": [
+            "Khoảng 2026-01〜2026-06 với go-live 2026-04-01 → 3 tháng legacy + 3 tháng mới",
+            "Không có lượt 本番 合格 → không đọc legacy, không notice"
+          ],
+          "spec_refs": ["RPT-02", "TBL-migration_runs", "TBL-legacy_settlement_rows", "TBL-legacy_delivery_rows"],
+          "hours": 4,
+          "hours_basis": "1 hàm tách khoảng có 3 biên (trước / vắt qua / sau go-live).",
+          "priority": "must",
+          "depends_on": ["E09-01", "E00-02h"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E09-04b",
+          "title": "Viết truy vấn RPT 10 người tham gia × tháng (giao dịch, thanh toán, thưởng)",
+          "discipline": "BE",
+          "description": "Theo tháng × người tham gia: số giao dịch, tiền giao dịch hiệu lực, tiền 精算, Σ 入金, 完納, tiền thưởng; tháng legacy lấy từ legacy_settlement_rows. Lọc participant_id.",
+          "acceptance": [
+            "Khoảng vắt qua go-live trả dòng có data_source 本システム / 移行 đúng tháng",
+            "Tổng tiền 精算 tháng mới khớp Σ settlement_lines cùng tháng"
+          ],
+          "spec_refs": ["RPT-02", "TBL-settlement_lines", "TBL-trades", "TBL-payments", "TBL-incentive_lines", "TBL-legacy_settlement_rows"],
+          "hours": 12,
+          "hours_basis": "Gộp 4 nguồn hệ thống mới + 1 nguồn legacy theo tháng × người, trộn 2 nguồn.",
+          "priority": "must",
+          "depends_on": ["E09-04a", "E00-02f"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E09-04c",
+          "title": "Viết truy vấn RPT 11 giao dịch theo tháng × loại",
+          "discipline": "BE",
+          "description": "Theo tháng × kind: số 確定 / 取消, tiền, số lượng theo đơn vị, số phiếu điều chỉnh; tháng legacy dùng trade_kind của legacy_settlement_rows. Lọc kind.",
+          "acceptance": [
+            "qty_by_unit tách theo đơn vị, không cộng lẫn kg với 尾",
+            "Tháng legacy có data_source 移行 và correction_count = null"
+          ],
+          "spec_refs": ["RPT-02", "TBL-trades", "TBL-trade_adjustments", "TBL-legacy_settlement_rows"],
+          "hours": 8,
+          "hours_basis": "Gom nhóm 2 chiều + số lượng theo đơn vị + trộn legacy.",
+          "priority": "must",
+          "depends_on": ["E09-04a"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E09-04d",
+          "title": "Viết truy vấn RPT 12 phiên bản quy tắc và số lần áp dụng",
+          "discipline": "BE",
+          "description": "Danh sách rule_versions + bậc tỷ lệ, người soạn / duyệt, phiên bản gốc, lý do hủy; đếm settlement_lines / incentive_line_parts theo rule_version_id (trong khoảng tháng nếu có). Lọc version, khoảng 発効日.",
+          "acceptance": [
+            "Phiên bản 下書き không có số đếm áp dụng (0)",
+            "Lọc khoảng 発効日 sai thứ tự → M_09"
+          ],
+          "spec_refs": ["RPT-02", "TBL-rule_versions", "TBL-rule_rate_tiers", "FN-rule-rule_version_for_date"],
+          "hours": 4,
+          "hours_basis": "1 truy vấn + 2 đếm con theo rule_version_id.",
+          "priority": "must",
+          "depends_on": ["E09-01", "E07-03"],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E09-05",
+      "title": "Dựng API RPT-02 xem dữ liệu báo cáo",
+      "discipline": "BE",
+      "description": "Route GET /api/reports/{reportCode}: guard 7 vai trò → quyền theo mã (403 + writeAuditLog 拒否 report.view) → validate → với báo cáo ngày kiểm business_days (開 → 200 rows rỗng + notice M_RPT_02) và readiness → chạy truy vấn đăng ký trong 1 snapshot REPEATABLE READ, totals toàn kết quả, phân trang 100 / tối đa 200, meta generated_at / target / output_by / batch_code / notice.",
+      "acceptance": [
+        "ROLE-003 mở rpt05 → 403 M_19 và 1 dòng audit 拒否",
+        "Ngày 開 → 200, rows rỗng, meta.notice M_RPT_02",
+        "Xem thành công không ghi audit",
+        "limit 300 → bị giới hạn 200 hoặc 400 theo quy ước chung"
+      ],
+      "spec_refs": ["RPT-02", "DD-F028-report-build", "FN-common-requireApiUser", "FN-common-writeAuditLog"],
+      "hours": 8,
+      "hours_basis": "Route khung có snapshot transaction, 3 nhánh notice và audit lần bị từ chối; truy vấn nằm ở E09-03 / 04.",
+      "priority": "must",
+      "depends_on": ["E09-01", "E09-02", "E00-03b"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E09-06",
+      "title": "Dựng API RPT-03 xuất CSV báo cáo dạng stream",
+      "discipline": "BE",
+      "description": "Cùng tham số và truy vấn với RPT-02; count trước (> 100,000 dòng → 422 M_RPT_04; ngày 開 → 422 M_RPT_02), writeAuditLog report.csv_export 成功 trước byte đầu (lỗi → 500 M_17), stream BOM → dòng metadata → tiêu đề → dòng (cursor 1,000) → dòng tổng; header X-Row-Count, Cache-Control no-store. Serializer CSV tách module để JOB-05 dùng lại.",
+      "acceptance": [
+        "Bộ lọc ra 100,001 dòng → 422 M_RPT_04, không ghi audit 成功",
+        "Xuất thành công có đúng 1 dòng audit với filters + row_count trước khi client nhận byte",
+        "Bộ nhớ không tăng theo số dòng (test 100,000 dòng)",
+        "Readiness building / failed không chặn, chỉ ghi chú ở dòng metadata"
+      ],
+      "spec_refs": ["RPT-03", "DD-F028-report-build", "FN-common-writeAuditLog", "ADR-008"],
+      "hours": 8,
+      "hours_basis": "Stream có cursor + thứ tự audit trước byte đầu + 3 nhánh 422 / 500.",
+      "priority": "must",
+      "depends_on": ["E09-05", "E00-03b"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E09-07",
+      "title": "Viết hàm job daily_report_build chọn ngày cần dựng",
+      "discipline": "DB",
+      "description": "Hàm job theo khung ADR-009 chạy mỗi 10 phút 10:00〜10:50 JST: chọn biz_date ưu tiên ngày chợ gần nhất trước hôm nay, sau đó ngày 締め済 cũ nhất trong 60 ngày cần dựng (chưa có lượt 成功, hoặc locked_at > finished_at lượt 成功 gần nhất → rebuild); slot 10:50 mà hôm qua còn 開 → job_runs 失敗 未締め + notify_event job_failed; có ngày → INSERT job_runs 実行中 (biz_date) + pg_net JOB-05.",
+      "acceptance": [
+        "Slot 10:10 sau khi 10:00 đã 成功 cùng ngày → processed_count 0, không gọi JOB-05",
+        "Mở khóa rồi khóa lại ngày D → slot kế tiếp dựng lại D với detail.rebuild = true",
+        "Hôm qua là 休市日 → slot 10:50 không báo 未締め",
+        "Unique partial 1 lượt 成功 / slot chặn dựng 2 lần khi 2 slot chồng nhau"
+      ],
+      "spec_refs": ["DD-F028-report-build", "ADR-009", "TBL-job_runs", "TBL-business_days", "JOB-05", "FN-notification-notify_event"],
+      "hours": 8,
+      "hours_basis": "3 luật chọn ngày + nhánh 未締め + rebuild sau mở khóa, có tương tranh slot.",
+      "priority": "must",
+      "depends_on": ["E00-05a", "E08-01"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E09-08",
+      "title": "Dựng endpoint JOB-05 lưu bản chụp CSV RPT 01〜09 vào Storage",
+      "discipline": "BE",
+      "description": "POST /api/internal/jobs/daily-report-build với Bearer CRON_SECRET: kiểm job_runs 実行中 (khác → 409 M_JOB_50) và ngày 締め済; với từng mã RPT 01〜09 chạy truy vấn registry trong snapshot REPEATABLE READ, sinh CSV bằng serializer của RPT-03, upsert reports/daily/<biz_date>/rptNN.csv; sắp hết 55 giây → trả remaining để slot sau làm tiếp; xong → job_run_complete 成功 (files, rows, sha256), lỗi → 失敗 + job_failed. Tạo bucket private reports nếu chưa có trong hạ tầng E00.",
+      "acceptance": [
+        "Đủ 9 file, detail.files có rows + sha256 từng file",
+        "pg_net giao lại cho lượt đã 成功 → 409 M_JOB_50, file không đổi",
+        "Sai secret → 401; body thiếu job_run_id → 400 M_COM_18",
+        "Ép lỗi upload rpt06 → job_runs 失敗 có error_message"
+      ],
+      "spec_refs": ["JOB-05", "DD-F028-report-build", "FN-ops-job_run_complete", "ADR-009"],
+      "hours": 8,
+      "hours_basis": "Vòng 9 báo cáo có ngân sách thời gian + upload + callback hoàn tất; truy vấn và serializer dùng lại.",
+      "priority": "must",
+      "depends_on": ["E09-07", "E09-06", "E09-03", "E00-05b", "E00-14"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E09-09",
+      "title": "Dựng màn SCR-032 帳票センター",
+      "discipline": "FE",
+      "description": "Màn PC xem 12 báo cáo: danh mục theo vai trò, bộ lọc động theo báo cáo, vùng kết quả, in qua PDF trình duyệt, xuất CSV.",
+      "acceptance": ["Mọi sub-issue xong"],
+      "spec_refs": ["SCR-032", "RPT-01", "RPT-02", "RPT-03"],
+      "hours": null,
+      "hours_basis": "Issue cha — tổng giờ nằm ở sub-issue.",
+      "priority": "must",
+      "depends_on": ["E09-02", "E09-05", "E09-06"],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E09-09a",
+          "title": "Dựng khung SCR-032: danh mục theo vai trò, banner readiness, bộ lọc động",
+          "discipline": "FE",
+          "description": "Gọi RPT-01 hiện danh mục được phép; banner M_RPT_01 / 02 / 03 theo readiness; vùng B bộ lọc sinh theo báo cáo đang chọn (ngày, tháng, lô, trạng thái nhiều lựa chọn, người tham gia, batch_code, kind, version) với validate client khớp server.",
+          "acceptance": [
+            "ROLE-004 chỉ thấy RPT 04; ROLE-005 thấy 12 mã",
+            "Đổi báo cáo xóa bộ lọc không thuộc báo cáo mới",
+            "Lỗi ô từ error_extra hiện dưới đúng ô"
+          ],
+          "spec_refs": ["SCR-032", "RPT-01"],
+          "hours": 8,
+          "hours_basis": "Form động theo 12 cấu hình bộ lọc + banner 3 trạng thái.",
+          "priority": "must",
+          "depends_on": ["E09-02", "E00-12a", "E00-12b"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E09-09b",
+          "title": "Dựng vùng kết quả 12 bố cục bảng, dòng tổng, metadata và in",
+          "discipline": "FE",
+          "description": "Vùng C / D: bố cục cột D-1〜D-12 theo báo cáo (RPT 04 2 bảng, RPT 09 có summary), dòng tổng toàn kết quả, metadata 作成日時 / 対象 / 出力者, nhãn data_source cho tháng legacy, phân trang, chế độ in (CSS print) ra PDF trình duyệt.",
+          "acceptance": [
+            "Mỗi mã báo cáo hiện đúng cột theo SCR-032",
+            "Tiền định dạng ¥ có dấu phẩy, số âm hiện dấu trừ",
+            "Bản in có metadata ở đầu trang"
+          ],
+          "spec_refs": ["SCR-032", "RPT-02", "COMMON-SPEC"],
+          "hours": 12,
+          "hours_basis": "12 bố cục cột khác nhau (2 bố cục nhiều khối) + in.",
+          "priority": "must",
+          "depends_on": ["E09-09a", "E09-05", "E00-12c"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E09-09c",
+          "title": "Nối nút xuất CSV RPT-03 trên SCR-032",
+          "discipline": "FE",
+          "description": "Tải file stream với cùng bộ lọc đang xem, chống bấm đôi, xử lý 422 M_RPT_04 / M_RPT_02 và đứt stream M_COM_16, toast M_RPT_07 khi xong.",
+          "acceptance": [
+            "422 M_RPT_04 hiện thông báo, không tải file rỗng",
+            "Tên file chứa mã báo cáo và đối tượng (ngày / tháng)"
+          ],
+          "spec_refs": ["SCR-032", "RPT-03"],
+          "hours": 4,
+          "hours_basis": "1 nút tải + 3 nhánh lỗi.",
+          "priority": "must",
+          "depends_on": ["E09-09a", "E09-06"],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E09-10",
+      "title": "Hiện thực hàm create_accounting_export tạo batch kế toán",
+      "discipline": "DB",
+      "description": "Hàm DB tạo batch X-YYYYMMDD-NNNNN cho 1 業務日 đã 締め, gộp dòng 精算 thành 1 dòng / người tham gia × 税区分, ghi batch + lines + dòng attachments của file trong 1 transaction (ADR-007).",
+      "acceptance": ["Mọi sub-issue xong"],
+      "spec_refs": ["FN-export-create_accounting_export", "DD-F030-accounting-csv-export", "ADR-007"],
+      "hours": null,
+      "hours_basis": "Issue cha — tổng giờ nằm ở sub-issue.",
+      "priority": "must",
+      "depends_on": ["E00-02g"],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E09-10a",
+          "title": "Viết luồng chính create_accounting_export: kiểm ngày, cấp mã, gộp dòng, ghi batch",
+          "discipline": "DB",
+          "description": "business_days FOR SHARE → kiểm 締め済 (M_ACC_01) → không có batch 作成済 / ダウンロード済 (M_ACC_02, index partial là chốt cuối) → next_business_no('X') → gộp settlement_lines của ngày theo participant_id × tax_category: net Σ (được âm), tax = sign(net) × floor(|net| × r) với r 8 / 10 / 0 %, gross; line_status ưu tiên 保留 (tranh chấp 未対応 / 対応中) > 調整済み (có dòng 引渡し取消 / 返品 / 修正) > 確認済み; INSERT lines + batch + attachments (文書7年, bucket exports); gán superseded_by_id cho batch 無効 mới nhất; audit_append accounting_export.create là lệnh cuối.",
+          "acceptance": [
+            "Ví dụ FN 4 nhóm → net 189,999 · tax 15,446 · gross 205,445",
+            "net −12,345 軽減8% → tax −987",
+            "Ngày 開 / tương lai → M_ACC_01, không tiêu số X",
+            "Xuất lại sau mở khóa: batch cũ 無効 có superseded_by_id = batch mới"
+          ],
+          "spec_refs": ["FN-export-create_accounting_export", "FN-common-next_business_no", "TBL-accounting_export_batches", "TBL-accounting_export_lines", "TBL-settlement_lines", "TBL-disputes", "TBL-attachments", "FN-audit-audit_append"],
+          "hours": 12,
+          "hours_basis": "Gộp 2 chiều có thuế đối xứng số âm, 3 mức line_status, 3 bảng ghi và khóa với CLS-04.",
+          "priority": "must",
+          "depends_on": ["E00-02g", "E00-02b", "E00-10", "E00-03a"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E09-10b",
+          "title": "Viết nhánh lỗi create_accounting_export: batch エラー và thông báo export_failed",
+          "discipline": "DB",
+          "description": "Bọc phần tính trong savepoint: lỗi ngoài dự kiến → INSERT batch エラー + error_message, notify_event export_failed (Critical → ROLE-005 / ROLE-009), audit accounting_export.error; batch エラー không chặn lần xuất sau.",
+          "acceptance": [
+            "Ép lỗi trong khối tính → batch エラー, 1 outbox export_failed, route nhận M_ACC_05",
+            "Sau batch エラー vẫn tạo được batch 作成済 cùng ngày"
+          ],
+          "spec_refs": ["FN-export-create_accounting_export", "FN-notification-notify_event", "DD-F030-accounting-csv-export"],
+          "hours": 4,
+          "hours_basis": "1 nhánh savepoint + 2 lời gọi có sẵn.",
+          "priority": "must",
+          "depends_on": ["E09-10a", "E08-01"],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E09-11",
+      "title": "Viết module dựng CSV kế toán và API ACC-02 tạo batch",
+      "discipline": "BE",
+      "description": "Module dựng file từ accounting_export_lines (cột theo D.2 + tax_category, CRLF, encoding / BOM là 1 cấu hình — chờ OQ-22), tính SHA-256; route ACC-02 bắt buộc Idempotency-Key, gọi rpc, sau commit PUT exports/accounting_export_batches/<id>/<uuid>.csv (upsert false, thử 3 lần); upload lỗi → 201 + meta.warnings M_ACC_50 và log cảnh báo. Không gọi mạng trong transaction.",
+      "acceptance": [
+        "201 trả batch_code, tổng, file_sha256 + Location",
+        "Bấm 2 lần cùng key → lần 2 trả kết quả cũ + Idempotent-Replayed",
+        "Storage tắt → 201 + M_ACC_50, batch vẫn 作成済",
+        "Dựng lại file từ lines cho cùng hash với file đã upload"
+      ],
+      "spec_refs": ["ACC-02", "DD-F030-accounting-csv-export", "ADR-007", "API-COMMON-CONVENTIONS"],
+      "hours": 8,
+      "hours_basis": "Serializer tất định có hash + route idempotent + retry upload 3 lần.",
+      "priority": "must",
+      "depends_on": ["E09-10", "E00-09", "E00-14"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E09-12",
+      "title": "Viết mark_export_downloaded và API ACC-03 tải file kế toán",
+      "discipline": "BE",
+      "description": "Trước transaction đọc object và so SHA-256 với file_sha256: thiếu object → dựng lại từ lines, khớp hash thì upload lại; hash lệch → 500 M_ACC_52 + notify security_event, không trả file. Hàm DB: batch FOR UPDATE → 無効 → 409 M_ACC_07, エラー → 409 M_ACC_51 → download_count + 1, lần đầu ダウンロード済 + first_downloaded_* → audit accounting_export.download. Cuối cùng cấp signed URL 60 giây (download = acc_<batch_code>.csv).",
+      "acceptance": [
+        "Tải 2 lần → download_count 2, first_downloaded_* giữ lần 1, 2 dòng audit",
+        "Thay object khác nội dung → 500 M_ACC_52, có security_event, không cấp URL",
+        "Batch bị vô hiệu giữa lúc tải → 409 M_ACC_07",
+        "Storage không tạo được URL → 503 M_COM_27"
+      ],
+      "spec_refs": ["ACC-03", "FN-export-mark_export_downloaded", "DD-F030-accounting-csv-export", "FN-notification-notify_event"],
+      "hours": 8,
+      "hours_basis": "1 hàm DB 3 nhánh trạng thái + kiểm / dựng lại file trước transaction.",
+      "priority": "must",
+      "depends_on": ["E09-11", "E08-01"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E09-13",
+      "title": "Dựng API ACC-01 danh sách ngày đã khóa và batch kế toán",
+      "discipline": "BE",
+      "description": "Mỗi ngày không phải 休市日 trong khoảng (mặc định 60 ngày): trạng thái ngày, batch mới nhất + mọi batch (kể cả 無効 với lý do), can_export; meta.overdue_count = ngày 締め済 quá 24 giờ chưa có batch hợp lệ (toàn hệ thống). Chỉ ROLE-005.",
+      "acceptance": [
+        "can_export = 締め済 và không có batch 作成済 / ダウンロード済",
+        "Ngày khóa 25 giờ chưa xuất được đếm vào overdue_count",
+        "ROLE-006 / ROLE-011 → 403 M_19"
+      ],
+      "spec_refs": ["ACC-01", "DD-F030-accounting-csv-export", "TBL-accounting_export_batches", "TBL-business_days"],
+      "hours": 4,
+      "hours_basis": "1 route đọc 2 bảng + 2 chỉ số phái sinh.",
+      "priority": "must",
+      "depends_on": ["E00-02g", "E00-07"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E09-14",
+      "title": "Dựng màn SCR-033 会計データ出力",
+      "discipline": "FE",
+      "description": "Danh sách ngày + batch (ACC-01), banner quá hạn M_ACC_06, dialog xác nhận M_ACC_03 rồi［出力］/［再出力］gửi ACC-02 có Idempotency-Key, cảnh báo M_ACC_50, nút tải gọi ACC-03 và mở signed URL ngay (hết hạn → M_ACC_09 bấm lại), hiện lý do batch 無効 (M_ACC_08).",
+      "acceptance": [
+        "Ngày chưa khóa không có nút xuất",
+        "Batch 無効 không có nút tải, hiện lý do mở khóa",
+        "Bấm xuất 2 lần nhanh chỉ tạo 1 batch"
+      ],
+      "spec_refs": ["SCR-033", "ACC-01", "ACC-02", "ACC-03"],
+      "hours": 12,
+      "hours_basis": "Bảng ngày × batch nhiều trạng thái + 2 dialog + luồng tải signed URL.",
+      "priority": "must",
+      "depends_on": ["E09-11", "E09-12", "E09-13", "E00-12a", "E00-12c"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E09-15",
+      "title": "Viết bộ test vector xuất kế toán và vô hiệu batch khi mở khóa",
+      "discipline": "QA",
+      "description": "pgTAP / Vitest theo test viewpoint DD-F030: gộp người × 税区分, thuế số âm, line_status (tranh chấp 対応中 / phiếu 申請中 / 返品 / bình thường), trùng batch, mở khóa sau khi tải → 無効 → xuất lại có superseded_by_id, ACC-02 song song CLS-04 không để lại batch hợp lệ cho ngày 開.",
+      "acceptance": [
+        "15 viewpoint DD-F030 có test tự động, chạy trong CI",
+        "Test tương tranh ACC-02 × CLS-04 chạy 50 lần không lỗi"
+      ],
+      "spec_refs": ["DD-F030-accounting-csv-export", "FN-export-create_accounting_export", "FN-closing-unlock_business_day", "ADR-007"],
+      "hours": 8,
+      "hours_basis": "Bộ dữ liệu mẫu nhiều người × 税区分 + 1 kịch bản tương tranh.",
+      "priority": "must",
+      "depends_on": ["E09-10", "E09-12", "E06-03", "E00-16"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E09-16",
+      "title": "Viết test đối chiếu chéo số liệu báo cáo ngày",
+      "discipline": "QA",
+      "description": "Trên fixture 1 ngày đầy đủ (giao dịch, điều chỉnh, giao hàng, ngoại lệ, batch): tổng tiền RPT 01 = giá trị hiệu lực, RPT 05 khớp closing_summary, RPT 06 khớp Σ settlement_lines + thuế, RPT 08 có cặp reverse / delta; RPT 10 / 11 trộn legacy đúng tháng.",
+      "acceptance": [
+        "Test chạy trong CI trên fixture dùng chung",
+        "Mỗi cặp báo cáo đối chiếu có assert số tiền chính xác tới yên"
+      ],
+      "spec_refs": ["DD-F028-report-build", "RPT-02", "FN-closing-closing_summary"],
+      "hours": 8,
+      "hours_basis": "Dựng fixture liên bảng + 5 phép đối chiếu.",
+      "priority": "should",
+      "depends_on": ["E09-03", "E09-04", "E06-01a", "E00-16"],
+      "constraint": null,
+      "sub_issues": []
+    }
+  ],
+  "spec_not_issued": [
+    {"spec": "Vô hiệu batch kế toán khi mở khóa ngày (FN-closing-unlock_business_day, DD-F030 §4)", "reason": "Nằm trong hàm CLS-04 → E06-03; E09-15 chỉ test tích hợp."},
+    {"spec": "Cảnh báo A-3 (báo cáo ngày chưa dựng 10:50) và A-4 (ngày khóa > 24 giờ chưa xuất)", "reason": "Do ops_watchdog sinh → E11."},
+    {"spec": "Seed sự kiện export_failed / job_failed trong notification_settings", "reason": "Thuộc E08-02."},
+    {"spec": "Bảng snapshot dữ liệu báo cáo (nếu RPT-02 không đạt p95 ≤ 2 giây)", "reason": "Chỉ làm khi ST đo không đạt (câu hỏi mở trong RPT-02); hiện đọc thẳng dữ liệu ngày đã khóa."},
+    {"spec": "Đo NFR-007 (sẵn sàng < 11:00) và NFR-004 ở tải năm 3", "reason": "Thuộc ST, ngoài phạm vi lập trình + unit test."},
+    {"spec": "Phòng tài chính nhập CSV vào hệ thống kế toán, 1 vòng test tích hợp (QA-009)", "reason": "Ngoài hệ thống / giai đoạn IT với khách."},
+    {"spec": "Nút dựng lại báo cáo thủ công sau mở khóa (phương án của OQ-25)", "reason": "Chưa có trong spec; hiện dựng lại ở slot kế tiếp, ROLE-009 có thể dùng OPS-06 (E11)."}
+  ],
+  "spec_gaps": [
+    {"spec": "DD-F030 §2.8 ↔ OQ-22 / OQ-03", "gap": "DD ghi file kế toán UTF-8 có BOM, trong khi đề xuất ở OQ-22 và OQ-03 là CSV kế toán không BOM (BOM chỉ cho CSV báo cáo).", "proposal": "issue làm rõ", "note": "E09-11 để encoding / BOM là 1 cấu hình, mặc định không BOM theo OQ-22 cho tới khi 会計システム担当 trả lời (hạn 2026-11-20)."},
+    {"spec": "FN-export-create_accounting_export ↔ ACC-02 / DD-F030 §2.9", "gap": "FN mô tả 3 chế độ prepare / commit / error với upload giữa 2 transaction; ACC-02 và DD dùng 1 transaction rồi upload sau commit.", "proposal": "sửa thiết kế", "note": "Backlog theo ACC-02 / DD (E09-10, E09-11); sửa FN."},
+    {"spec": "ADR-007 §6 ↔ TBL-accounting_export_lines / FN create_accounting_export", "gap": "ADR-007 còn ghi thuế 10% và gộp theo người tham gia × ngày; DB và FN đã chốt 軽減8% mặc định và tách theo tax_category.", "proposal": "sửa thiết kế", "note": "Backlog theo DB / FN; cập nhật ADR-007."},
+    {"spec": "ADR-009 job daily_report_build ↔ FN-LIST", "gap": "Không có function spec cho hàm job daily_report_build (luật chọn ngày, nhánh 未締め, rebuild) — chỉ có mô tả trong DD-F028 §1.", "proposal": "giả định", "note": "E09-07 làm theo DD-F028 §1 bước 1〜6; đề xuất bổ sung FN để reviewer có chuẩn đối chiếu."},
+    {"spec": "DD-F028 §1 (bucket reports) ↔ E00-14 / ADR-002", "gap": "JOB-05 ghi vào bucket reports nhưng danh sách bucket dựng ở hạ tầng chỉ có attachments, exports, audit-archive, cold-archive.", "proposal": "giả định", "note": "E09-08 tạo bucket private reports bằng migration storage; báo owner E00 bổ sung vào danh sách hạ tầng."},
+    {"spec": "JOB-05 bản chụp RPT 06 ↔ thời điểm xuất batch kế toán", "gap": "Bản chụp dựng lúc 10:00〜10:50 ngay sau khóa sổ; ROLE-005 có thể xuất batch sau đó (A-4 cho phép tới 24 giờ) nên rpt06.csv trong bản chụp thường rỗng. Tương tự rpt03 / rpt09 không theo biz_date nên bản chụp chỉ là trạng thái lúc dựng.", "proposal": "issue làm rõ", "note": "Hỏi mục đích bản chụp (bằng chứng NFR-007 hay nguồn tải); đề xuất bỏ rpt06 khỏi bản chụp hoặc dựng lại khi có batch mới."},
+    {"spec": "RPT-02 bảng tham số ↔ DD-F028 §3", "gap": "RPT-02 bắt buộc biz_date cho rpt01 / 02 / 04 / 05 / 08; DD chỉ nêu RPT 01 / 04 / 05. DD cũng ghi nguồn RPT 01 là trades + lots trong khi cột delivered_done_count cần deliveries.", "proposal": "sửa thiết kế", "note": "Backlog theo RPT-02 (E09-01, E09-03a); sửa DD-F028."},
+    {"spec": "SCREEN-LIST SCR-032 (ROLE-005, 010, 008) ↔ RPT-01 / ma trận màn", "gap": "Screen list chỉ ghi 3 vai trò, API và ma trận truy cập cho 7 vai trò (thêm ROLE-003, 004, 007, 011).", "proposal": "sửa thiết kế", "note": "E09-09a cho menu theo 7 vai trò; cập nhật screen list."},
+    {"spec": "OQ-25 (dựng lại báo cáo sau mở / khóa lại)", "gap": "Báo cáo của ngày mở khóa rồi khóa lại chỉ dựng lại ở slot 10:00 hôm sau; khách có thể cần dựng ngay.", "proposal": "để mở", "note": "E09-07 làm theo DD (slot kế tiếp); nếu khách cần ngay → thêm nút / API (CR nhỏ)."}
+  ]
+}

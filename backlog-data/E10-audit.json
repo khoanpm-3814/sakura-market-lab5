@@ -1,0 +1,271 @@
+{
+  "epic": "E10",
+  "title": "Audit",
+  "f_ids": ["F-031", "F-032"],
+  "summary": "Phần audit ngoài nền tảng ghi (audit_append / writeAuditLog đã ở E00-03): job kiểm chuỗi hash hằng ngày, bản sao tháng chống sửa ra Storage, kiểm dải theo trang, API tra cứu AUD-01〜03 có phân quyền theo loại log và màn SCR-034 nâng cấp từ prototype.",
+  "issues": [
+    {
+      "key": "E10-01",
+      "title": "Viết hàm job audit_chain_verify kiểm toàn chuỗi hằng ngày",
+      "discipline": "DB",
+      "description": "Hàm job 10:30 JST theo khung ADR-009: kiểm neo lượt 成功 trước (last_audit_id + last_row_hash) để bắt xóa / viết lại đuôi, duyệt id tăng dần khối 10,000 dựng lại row_hash bằng đúng biểu thức payload của audit_append, dừng ở lệch đầu tiên; không lệch → kiểm neo từng tháng audit_log_archives (first_prev_hash, last_row_hash, row_count, tính liên tục) và ghi verified_at; lệch → job_runs 失敗 M_AUD_02 + mismatch_audit_id + notify_event security_event (ROLE-009, ROLE-011). Không gọi audit_append trong job; statement_timeout 30 phút riêng lượt.",
+      "acceptance": [
+        "Chuỗi nguyên vẹn → 成功, detail có verified_count, last_audit_id, last_row_hash, archives_verified",
+        "Superuser sửa reason 1 dòng giữa → 失敗, mismatch_audit_id đúng dòng đó",
+        "Xóa dòng cuối sau lượt hôm qua → bước neo phát hiện",
+        "Slot đã 成功 không chạy lại"
+      ],
+      "spec_refs": ["FN-audit-audit_chain_verify", "DD-F031-audit-append-search-archive", "TBL-audit_logs", "TBL-audit_log_archives", "TBL-job_runs", "ADR-008", "ADR-009"],
+      "hours": 12,
+      "hours_basis": "4 bước kiểm (neo lượt, dựng hash từng dòng, neo tháng, liên tục tháng) trên bảng rất lớn, phải khớp tuyệt đối biểu thức hash của audit_append.",
+      "priority": "must",
+      "depends_on": ["E00-03a", "E00-05a", "E08-01"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E10-02",
+      "title": "Viết hàm kiểm dải audit_rows_verify cho chế độ verify của AUD-01",
+      "discipline": "DB",
+      "description": "Hàm chỉ đọc nhận p_from_id / p_to_id (dải của 1 trang kết quả, ≤ 200 dòng) trả từng id kèm hash_ok (row_hash tính lại khớp) và chain_ok (prev_hash = row_hash dòng liền trước theo id). Dùng chung biểu thức payload với E10-01 (tách hàm nội bộ).",
+      "acceptance": [
+        "Dòng bị sửa nội dung → hash_ok false; dòng liền sau → chain_ok vẫn true nếu prev_hash không đổi",
+        "Dải chứa dòng đầu bảng so với 64 ký tự 0",
+        "Dải > 200 dòng bị từ chối"
+      ],
+      "spec_refs": ["AUD-01", "FN-audit-audit_chain_verify", "FN-audit-audit_append", "ADR-008"],
+      "hours": 4,
+      "hours_basis": "Biến thể nhỏ của E10-01 trên dải giới hạn, dùng lại hàm payload.",
+      "priority": "must",
+      "depends_on": ["E10-01"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E10-03",
+      "title": "Viết hàm job audit_archive và audit_archive_record",
+      "discipline": "DB",
+      "description": "Hàm job ngày 1 lúc 10:40 JST: tính archive_month = tháng trước (JST), from / to audit_id; tháng đã có dòng archive (UNIQUE) → kết thúc 成功 không gọi; ngược lại INSERT job_runs 実行中 + pg_net JOB-07. audit_archive_record (callback): kiểm row_count = count trong dải, lấy first_prev_hash / last_row_hash từ DB, INSERT audit_log_archives (storage_path, file_sha256, job_run_id), kết thúc job_runs 成功; lệch số dòng → 失敗.",
+      "acceptance": [
+        "Chạy lại cùng tháng không tạo dòng / tệp thứ hai",
+        "row_count báo từ endpoint ≠ count DB → job_runs 失敗 M_OPS_80, không INSERT archive",
+        "Lượt verify kế tiếp ghi verified_at cho tháng vừa lưu"
+      ],
+      "spec_refs": ["FN-audit-audit_archive_record", "DD-F031-audit-append-search-archive", "TBL-audit_log_archives", "TBL-job_runs", "JOB-07", "ADR-008"],
+      "hours": 8,
+      "hours_basis": "2 hàm nhỏ có idempotent theo tháng và kiểm chéo số dòng.",
+      "priority": "must",
+      "depends_on": ["E00-03a", "E00-05a", "E00-05b"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E10-04",
+      "title": "Dựng endpoint JOB-07 xuất audit log tháng ra bucket audit-archive",
+      "discipline": "BE",
+      "description": "POST /api/internal/jobs/audit-archive (Bearer CRON_SECRET): kiểm lượt 実行中 (khác → 409 M_JOB_50), đọc audit_logs theo id trang 5,000 bằng service role chỉ đọc, stream NDJSON → gzip → upload audit-archive/<archive_month>.ndjson.gz (upsert false, retention lock), tính SHA-256 trên luồng; gọi audit_archive_record; lỗi upload / thiếu dòng → job_run_complete 失敗. Vượt 60 giây → chia phần partNN theo cách chốt ở spec_gaps.",
+      "acceptance": [
+        "Tháng 450,000 dòng không giữ cả tệp trong bộ nhớ",
+        "Giải nén tệp đếm đúng row_count, SHA-256 khớp file_sha256",
+        "Sai secret → 401; giao lại lượt đã kết thúc → 409 M_JOB_50"
+      ],
+      "spec_refs": ["JOB-07", "DD-F031-audit-append-search-archive", "FN-audit-audit_archive_record", "FN-ops-job_run_complete"],
+      "hours": 12,
+      "hours_basis": "Stream nén + hash trên luồng + chia phần theo giới hạn thời gian function.",
+      "priority": "must",
+      "depends_on": ["E10-03", "E00-05b", "E00-14"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E10-05",
+      "title": "Dựng API AUD-01 tìm audit log có phân quyền theo loại log",
+      "discipline": "BE",
+      "description": "GET /api/audit-logs cho ROLE-005 / 009 / 011: lọc khoảng at (≤ 366 ngày), user_id, log_category, action, entity, trade_no, biz_date, participant_id, outcome; mới nhất trước, phân trang 100; nhãn trade_no / code / name. ROLE-009 thuần bị ép chỉ 権限 / セキュリティ / 運用 (lọc 業務 → 403, meta.notice M_AUD_04). verify = true gọi audit_rows_verify cho dải của trang. writeAuditLog audit_log.search (filters, result_count, verify) trước khi trả dữ liệu. Thêm migration index (at), (trade_id, at), (biz_date, at), (participant_id, at), (action, at), (log_category, at). Thay route prototype.",
+      "acceptance": [
+        "ROLE-009 lọc 業務 → 403 M_19; ROLE-003 gọi → 403",
+        "Khoảng 400 ngày → 400 M_AUD_01",
+        "Mỗi lần tìm thành công có đúng 1 dòng audit_log.search",
+        "verify = true trên trang có dòng bị sửa → notice M_AUD_02, kết quả vẫn trả",
+        "Khóa JSON snake_case theo tên cột"
+      ],
+      "spec_refs": ["AUD-01", "DD-F031-audit-append-search-archive", "TBL-audit_logs", "FN-common-writeAuditLog", "SCR-034"],
+      "hours": 12,
+      "hours_basis": "9 điều kiện lọc + ép phạm vi theo vai trò + chế độ verify + audit đọc nhạy cảm + 6 index.",
+      "priority": "must",
+      "depends_on": ["E10-02", "E00-03b", "E00-07"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E10-06",
+      "title": "Dựng API AUD-03 trạng thái toàn vẹn chuỗi audit",
+      "discipline": "BE",
+      "description": "Đọc lượt audit_chain_verify gần nhất (job_runs) + tháng lưu trữ đã xác minh: 正常 (成功 trong 26 giờ, M_AUD_03), 改ざん検知 (失敗 có mismatch, M_AUD_02), 検証エラー (失敗 không mismatch), 遅延 (> 26 giờ, M_AUD_05). Không kiểm theo yêu cầu.",
+      "acceptance": [
+        "Không có lượt verify 27 giờ → 遅延 + M_AUD_05",
+        "Lượt 失敗 có mismatch_audit_id → 改ざん検知",
+        "Vai trò ngoài ROLE-005 / 009 / 011 → 403"
+      ],
+      "spec_refs": ["AUD-03", "DD-F031-audit-append-search-archive", "TBL-job_runs", "TBL-audit_log_archives"],
+      "hours": 4,
+      "hours_basis": "1 route đọc 2 bảng, 4 trạng thái theo mốc giờ.",
+      "priority": "must",
+      "depends_on": ["E10-01", "E00-07"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E10-07",
+      "title": "Dựng API AUD-02 tra phiên bản quy tắc đã áp dụng",
+      "discipline": "BE",
+      "description": "GET /api/audit-logs/rule-applications cho ROLE-005 / 011: theo period / participant_id / trade_no (≥ 1 điều kiện, thiếu → M_AUD_06) trả rule_version_id đã lưu trên incentive_line_parts và settlement_lines kèm số phiên bản + 発効日 từ rule_versions; không suy lại phiên bản từ ngày (ADR-005).",
+      "acceptance": [
+        "Kỳ có đổi quy tắc giữa tháng → 2 phiên bản, mỗi phần đúng rule_version_id",
+        "Không truyền điều kiện → 400 M_AUD_06",
+        "ROLE-009 → 403"
+      ],
+      "spec_refs": ["AUD-02", "DD-F031-audit-append-search-archive", "TBL-incentive_line_parts", "TBL-settlement_lines", "TBL-rule_versions", "ADR-005"],
+      "hours": 8,
+      "hours_basis": "Hợp 2 nguồn (thưởng / thanh toán) với 3 cách lọc và join phiên bản.",
+      "priority": "must",
+      "depends_on": ["E00-02f", "E00-02c", "E00-07"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E10-08",
+      "title": "Lập danh mục mã action audit và nhãn hiển thị dùng chung",
+      "discipline": "BE",
+      "description": "Gom mọi mã action (<entity>.<verb>) đã quy định trong FN / DD thành 1 module (mã, log_category, nhãn tiếng Nhật) dùng cho bộ lọc C-6 của SCR-034 và hiển thị; kèm test so danh mục với các mã thực sự được gọi trong migration SQL / route (mã lạ → CI đỏ).",
+      "acceptance": [
+        "Danh mục có mọi action xuất hiện trong supabase/migrations và app/api",
+        "Gọi audit_append với mã không có trong danh mục → test đỏ"
+      ],
+      "spec_refs": ["DD-F031-audit-append-search-archive", "FN-audit-audit_append", "SCR-034", "COMMON-MESSAGE-LIST"],
+      "hours": 4,
+      "hours_basis": "Tổng hợp tĩnh + 1 script quét so khớp.",
+      "priority": "should",
+      "depends_on": ["E00-03a", "E00-12d"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E10-09",
+      "title": "Nâng cấp màn SCR-034 監査ログ検索 từ prototype",
+      "discipline": "FE",
+      "description": "Màn prototype /audit-logs đã có; to-be thêm panel trạng thái chuỗi, bộ lọc FR-AUDIT-02, phân trang, verify hash, tab phiên bản quy tắc và giới hạn hiển thị cho ROLE-009.",
+      "acceptance": ["Mọi sub-issue xong"],
+      "spec_refs": ["SCR-034", "AUD-01", "AUD-02", "AUD-03"],
+      "hours": null,
+      "hours_basis": "Issue cha — tổng giờ nằm ở sub-issue.",
+      "priority": "must",
+      "depends_on": ["E10-05", "E10-06", "E10-07"],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E10-09a",
+          "title": "Dựng panel A trạng thái chuỗi hash trên SCR-034",
+          "discipline": "FE",
+          "description": "Gọi AUD-03: banner đỏ cố định M_AUD_02 khi 改ざん検知, banner vàng M_AUD_05 khi 遅延, nhãn lần kiểm gần nhất + tháng lưu trữ đã xác minh.",
+          "acceptance": [
+            "改ざん検知 → banner đỏ không đóng được",
+            "Cả 3 vai trò được xem panel"
+          ],
+          "spec_refs": ["SCR-034", "AUD-03"],
+          "hours": 4,
+          "hours_basis": "1 panel 4 trạng thái.",
+          "priority": "must",
+          "depends_on": ["E10-06", "E00-12a"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E10-09b",
+          "title": "Dựng lại tab 監査ログ: bộ lọc mới, phân trang, chi tiết trước / sau, verify",
+          "discipline": "FE",
+          "description": "Thêm ô 業務日, 取引番号, 参加者, ログ区分, 結果; đổi mapper sang snake_case; phân trang 100; chi tiết dòng hiện before / after (chỉ cột đổi), lý do; nút verify hiện cột hash_ok / chain_ok; ROLE-009 ẩn lựa chọn 業務 và hiện notice M_AUD_04; lỗi khoảng ngày dùng M_09 / M_AUD_01; phím tắt theo NFR-016.",
+          "acceptance": [
+            "Bỏ giới hạn cứng 200 dòng của prototype",
+            "ROLE-009 không chọn được 業務",
+            "Dòng outcome 拒否 hiện được và lọc được"
+          ],
+          "spec_refs": ["SCR-034", "AUD-01", "COMMON-SPEC"],
+          "hours": 12,
+          "hours_basis": "Sửa form 5 ô mới + bảng phân trang + panel chi tiết + chế độ verify + giới hạn vai trò trên code có sẵn.",
+          "priority": "must",
+          "depends_on": ["E10-05", "E10-08", "E00-12c"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E10-09c",
+          "title": "Dựng tab 適用規程版照会 (AUD-02) trên SCR-034",
+          "discipline": "FE",
+          "description": "Form period / người tham gia / mã giao dịch (≥ 1), bảng phiên bản áp dụng trên dòng thưởng / thanh toán kèm 発効日; ẩn tab với ROLE-009.",
+          "acceptance": [
+            "Không nhập điều kiện → hiện M_AUD_06, không gọi API",
+            "ROLE-009 không thấy tab"
+          ],
+          "spec_refs": ["SCR-034", "AUD-02"],
+          "hours": 8,
+          "hours_basis": "1 tab mới có form 3 điều kiện + bảng hợp 2 nguồn.",
+          "priority": "must",
+          "depends_on": ["E10-07", "E00-12c"],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E10-10",
+      "title": "Viết bộ test vector toàn vẹn chuỗi audit và append-only",
+      "discipline": "QA",
+      "description": "pgTAP / Vitest: 50 transaction song song cùng ghi audit → chuỗi liên tục, verify 成功; sửa dòng giữa / xóa đuôi / chèn dòng / sửa neo tháng → verify 失敗 đúng id; UPDATE / DELETE / TRUNCATE bằng service_role bị từ chối; ép lỗi audit_append → thao tác nghiệp vụ rollback 500 M_17; lần bị từ chối có dòng 拒否.",
+      "acceptance": [
+        "15 viewpoint DD-F031 có test tự động trong CI",
+        "Test song song chạy 20 lần liên tiếp không lỗi"
+      ],
+      "spec_refs": ["DD-F031-audit-append-search-archive", "FN-audit-audit_append", "FN-audit-audit_chain_verify", "ADR-008"],
+      "hours": 8,
+      "hours_basis": "5 kịch bản giả mạo + 1 kịch bản tương tranh trên fixture chung.",
+      "priority": "must",
+      "depends_on": ["E10-01", "E10-03", "E00-03a", "E00-16"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E10-11",
+      "title": "Viết kiểm tra phủ audit cho mọi hàm DB ghi và route bị từ chối",
+      "discipline": "QA",
+      "description": "Script trong CI: mọi hàm plpgsql có INSERT / UPDATE bảng nghiệp vụ phải gọi audit_append và là lệnh cuối trước return; mọi route ghi có nhánh writeAuditLog cho 401 / 403 / 409 / 422. Kèm danh sách ngoại lệ có lý do (hàm job, hàm chỉ đọc).",
+      "acceptance": [
+        "Hàm ghi thiếu audit_append → CI đỏ chỉ rõ tên hàm",
+        "Danh sách ngoại lệ nằm trong repo và được review"
+      ],
+      "spec_refs": ["DD-F031-audit-append-search-archive", "FN-common-writeAuditLog", "ADR-008", "ADR-003"],
+      "hours": 8,
+      "hours_basis": "Phân tích tĩnh SQL + route, cần xử lý nhiều dạng hàm.",
+      "priority": "should",
+      "depends_on": ["E00-03b", "E00-13a"],
+      "constraint": null,
+      "sub_issues": []
+    }
+  ],
+  "spec_not_issued": [
+    {"spec": "Bảng audit_logs / audit_log_archives, trigger chặn sửa, REVOKE, hàm audit_append, writeAuditLog", "reason": "Đã ở E00-03a / E00-03b (nền tảng mọi epic dùng)."},
+    {"spec": "Lời gọi audit_append trong từng hàm nghiệp vụ và audit đọc nhạy cảm RPT-03 / ACC-03 / ATT-03", "reason": "Thuộc issue của từng epic sở hữu hàm / route (E01〜E09, E11); E10-11 chỉ kiểm phủ."},
+    {"spec": "Cảnh báo A-6 / A-7 từ audit log", "reason": "Do ops_watchdog sinh → E11."},
+    {"spec": "Báo cáo tháng gửi ROLE-011 có last_row_hash làm neo ngoài DB (ADR-008 Decision 4, DD-F031 §2.7)", "reason": "Không có API / màn / job nào trong spec; xem spec_gaps."},
+    {"spec": "Đo hiệu năng verify 40 triệu dòng (statement_timeout 30 phút) và AUD-01 p95 ≤ 2 giây", "reason": "Thuộc ST."}
+  ],
+  "spec_gaps": [
+    {"spec": "AUD-01 Processing bước 6 ↔ FN-audit-audit_chain_verify", "gap": "AUD-01 gọi audit_chain_verify(p_from_id, p_to_id) để kiểm từng dòng của trang, nhưng FN chỉ mô tả chế độ job toàn chuỗi (ghi job_runs, gửi thông báo) — không có chế độ dải trả hash_ok / chain_ok.", "proposal": "sửa thiết kế", "note": "E10-02 tách hàm chỉ đọc audit_rows_verify dùng chung biểu thức payload; bổ sung FN."},
+    {"spec": "DD-F031 §3.3 (chia partNN) ↔ TBL-audit_log_archives", "gap": "DD cho chia tệp tháng thành nhiều phần khi vượt 60 giây, nhưng bảng archive có archive_month UNIQUE với 1 storage_path / file_sha256 — không lưu được nhiều phần.", "proposal": "sửa thiết kế", "note": "Đề xuất thêm part_no vào khóa (archive_month, part_no) hoặc 1 tệp manifest; cần chốt trước E10-04."},
+    {"spec": "FN-audit-audit_chain_verify mục Mở ↔ TBL-audit_log_archives (verified_at)", "gap": "Bảng nói verified_at ghi sau khi băm lại tệp Storage và chuỗi; băm lại tệp cần endpoint JOB đọc tệp mà API list không có. v1 chỉ xác minh neo trong DB.", "proposal": "issue làm rõ", "note": "Hỏi PL có cần kiểm tệp định kỳ không; nếu có → thêm JOB-08 (≈ 8h)."},
+    {"spec": "ADR-008 Decision 4 / DD-F031 §2.7", "gap": "Neo ngoài DB = last_row_hash in vào báo cáo tháng gửi ROLE-011, nhưng không có báo cáo / API / thông báo nào thực hiện việc này.", "proposal": "issue làm rõ", "note": "Đề xuất thêm vào thông báo tháng (E08) hoặc RPT riêng; tạm thời ROLE-011 xem AUD-03."},
+    {"spec": "SCR-034 Giả định ↔ API-LIST AUD-03", "gap": "SCR-034 còn ghi API trạng thái chuỗi chưa có trong catalogue, trong khi API list v1.1 đã thêm AUD-03.", "proposal": "sửa thiết kế", "note": "Chỉ cập nhật tài liệu màn."},
+    {"spec": "SCR-034 C-6 / DD-F031 §1.6", "gap": "Danh mục mã action nằm rải ở từng FN / DD, chưa có bảng tổng có nhãn tiếng Nhật cho bộ lọc.", "proposal": "giả định", "note": "E10-08 tự gom và kiểm bằng script."},
+    {"spec": "FN-LIST No.2 (writeAuditLog callers) ↔ DD-F031 §1.7 / DD-F035 §3.3", "gap": "DD-F031 coi ATT-03 là đọc nhạy cảm qua writeAuditLog, DD-F035 lại ghi bằng audit_append trong DB; FN-LIST không liệt kê ATT-03 ở caller nào.", "proposal": "sửa thiết kế", "note": "Backlog theo DD-F035 (E11 ATT-03 dùng audit_append trước cấp URL); sửa FN-LIST."}
+  ]
+}

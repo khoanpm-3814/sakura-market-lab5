@@ -1,0 +1,1083 @@
+{
+  "epic": "E00",
+  "title": "Nền tảng chung",
+  "f_ids": [],
+  "summary": "Khung Next.js App Router + Supabase Tokyo, toàn bộ migration DDL 46 bảng, RLS deny-all, guard API, hàm DB/TS dùng chung, audit append, tải tệp ATT-01/02, khung job pg_cron, UI shell, CI/CD. Mọi epic nghiệp vụ E01–E11 dựa vào các key ổn định của epic này.",
+  "constraint": null,
+  "issues": [
+    {
+      "key": "E00-01",
+      "title": "Dựng khung dự án Next.js + Supabase CLI",
+      "discipline": "INFRA",
+      "description": "Tạo repo Next.js App Router (TypeScript strict), cấu trúc thư mục theo domain (app/, app/api/, lib/server, lib/client, supabase/migrations, supabase/tests), Supabase CLI chạy local, client service-role chỉ ở module server-only, schema kiểm biến môi trường. Không gồm nghiệp vụ.",
+      "acceptance": [
+        "npm run dev chạy được, trang mặc định hiển thị lang=ja",
+        "supabase start + supabase db reset chạy sạch trên máy dev",
+        "Import client service-role từ client component bị build báo lỗi (server-only)",
+        "Thiếu biến môi trường bắt buộc → app dừng khi khởi động kèm thông báo rõ",
+        "ESLint, Prettier, Vitest, pgTAP chạy được bằng script npm"
+      ],
+      "spec_refs": [
+        "ADR-001",
+        "ARCH-OVERVIEW",
+        "SPEC-CONVENTIONS"
+      ],
+      "hours": 8,
+      "hours_basis": "Khung chuẩn, không logic nghiệp vụ; phần lớn là cấu hình công cụ và quy ước thư mục.",
+      "priority": "must",
+      "depends_on": [],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E00-02",
+      "title": "Viết migration DDL cho 46 bảng theo thứ tự bước 100–270",
+      "discipline": "DB",
+      "description": "Hiện thực toàn bộ bảng trong database-design theo đúng thứ tự DDL (FK vòng thêm sau bằng ALTER), gồm CHECK trạng thái tiếng Nhật, index, cột chuẩn created/updated, trigger set_updated_at và trigger chặn UPDATE/DELETE cho bảng append-only / dữ liệu đã 確定. Chia theo nhóm bước để mỗi phần ≤ 16 giờ.",
+      "acceptance": [
+        "supabase db reset tạo đủ bảng, không lỗi FK",
+        "Mỗi nhóm có test pgTAP kiểm tồn tại bảng, cột NOT NULL, CHECK chính và trigger append-only"
+      ],
+      "spec_refs": [
+        "DB-TABLES-LIST",
+        "DB-INITIAL-DATA",
+        "DB-ER-DIAGRAM",
+        "STATE-MACHINES"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — giờ ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E00-01"
+      ],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E00-02a",
+          "title": "Migration bước 100–120: extension, tiện ích, vai trò, hồ sơ, người tham gia",
+          "discipline": "DB",
+          "description": "Bật pgcrypto, btree_gist, pg_cron, pg_net; hàm set_updated_at(); bảng roles, profiles (FK auth.users), user_roles, participants và FK vòng profiles.participant_id.",
+          "acceptance": [
+            "4 bảng tạo được, profiles.id = auth.users.id với ON DELETE RESTRICT",
+            "CHECK cặp participants.kind ↔ căn cứ (市場登録 / 許可 / 承認 / 参加期限) chặn giá trị sai",
+            "user_roles cho phép 1 người nhiều vai trò, có lịch sử cấp / thu hồi",
+            "Test pgTAP cho CHECK và FK vòng"
+          ],
+          "spec_refs": [
+            "TBL-roles",
+            "TBL-profiles",
+            "TBL-user_roles",
+            "TBL-participants",
+            "DB-INITIAL-DATA"
+          ],
+          "hours": 8,
+          "hours_basis": "4 bảng master + 1 FK vòng + CHECK theo loại người tham gia.",
+          "priority": "must",
+          "depends_on": [
+            "E00-01"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E00-02b",
+          "title": "Migration bước 130–140: job_runs, attachments, bộ bảng tư cách",
+          "discipline": "DB",
+          "description": "Bảng job_runs, attachments (storage_path UNIQUE, retention_class, storage_status), eligibility_requests, eligibility_periods (EXCLUDE chồng kỳ bằng btree_gist), eligibility_status_histories, FK vòng request ↔ period.",
+          "acceptance": [
+            "Chèn 2 kỳ chồng ngày cho cùng người tham gia + cùng căn cứ bị EXCLUDE chặn",
+            "attachments.storage_path trùng bị chặn",
+            "eligibility_status_histories không UPDATE/DELETE được (trigger)",
+            "Test pgTAP cho EXCLUDE, UNIQUE, trigger"
+          ],
+          "spec_refs": [
+            "TBL-job_runs",
+            "TBL-attachments",
+            "TBL-eligibility_requests",
+            "TBL-eligibility_periods",
+            "TBL-eligibility_status_histories",
+            "ADR-010"
+          ],
+          "hours": 8,
+          "hours_basis": "5 bảng, 1 ràng buộc EXCLUDE và 1 FK vòng cần test kỹ.",
+          "priority": "must",
+          "depends_on": [
+            "E00-02a"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E00-02c",
+          "title": "Migration bước 150–160: lịch 業務日, bộ đếm mã, phiên bản quy tắc",
+          "discipline": "DB",
+          "description": "Bảng business_days (開 / 締め済, is_holiday), business_no_counters (khóa chính prefix × biz_date), rule_versions, rule_rate_tiers (CASCADE khi version còn 下書き).",
+          "acceptance": [
+            "CHECK trạng thái business_days và rule_versions đúng danh sách",
+            "Xóa rule_versions 下書き xóa theo tiers; version khác 下書き không xóa được",
+            "Test pgTAP cho CHECK và CASCADE có điều kiện"
+          ],
+          "spec_refs": [
+            "TBL-business_days",
+            "TBL-business_no_counters",
+            "TBL-rule_versions",
+            "TBL-rule_rate_tiers",
+            "ADR-005"
+          ],
+          "hours": 4,
+          "hours_basis": "4 bảng ít cột, logic chủ yếu nằm ở hàm (issue khác).",
+          "priority": "must",
+          "depends_on": [
+            "E00-02a"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E00-02d",
+          "title": "Migration bước 170–180: lô, thẩm định, giao dịch, せり, phiếu điều chỉnh",
+          "discipline": "DB",
+          "description": "Bảng lots (remaining_qty CHECK 0..initial_qty, client_op_id UNIQUE), lot_inspections (append-only), lot_adjustments, trades (giá trị gốc bất biến sau 確定, tax_category), seri_results, correction_requests, trade_adjustments (cặp reverse/delta).",
+          "acceptance": [
+            "remaining_qty âm hoặc vượt initial_qty bị CHECK chặn",
+            "Trigger chặn sửa cột giá gốc của trades khi status đã 確定",
+            "lot_inspections chặn UPDATE/DELETE",
+            "CHECK đơn vị: đơn vị khác kg phải là số nguyên",
+            "Test pgTAP cho từng CHECK/trigger trên"
+          ],
+          "spec_refs": [
+            "TBL-lots",
+            "TBL-lot_inspections",
+            "TBL-lot_adjustments",
+            "TBL-trades",
+            "TBL-seri_results",
+            "TBL-correction_requests",
+            "TBL-trade_adjustments",
+            "ADR-004"
+          ],
+          "hours": 12,
+          "hours_basis": "7 bảng lõi có nhiều CHECK chéo cột và trigger bất biến sau 確定.",
+          "priority": "must",
+          "depends_on": [
+            "E00-02b",
+            "E00-02c"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E00-02e",
+          "title": "Migration bước 190 + 210: giao hàng, ngoại lệ, tranh chấp, dòng thanh toán",
+          "discipline": "DB",
+          "description": "Bảng deliveries (reversal_of_id, client_op_id UNIQUE, buyer_warning_ack_at), disputes, dispute_notes (append-only), delivery_exceptions, FK vòng deliveries ↔ delivery_exceptions, settlement_lines.",
+          "acceptance": [
+            "FK vòng deliveries ↔ delivery_exceptions tạo được sau ALTER",
+            "dispute_notes chặn UPDATE/DELETE",
+            "settlement_lines có tax_category mặc định 軽減8%",
+            "Test pgTAP cho FK vòng, CHECK, trigger"
+          ],
+          "spec_refs": [
+            "TBL-deliveries",
+            "TBL-delivery_exceptions",
+            "TBL-disputes",
+            "TBL-dispute_notes",
+            "TBL-settlement_lines"
+          ],
+          "hours": 8,
+          "hours_basis": "5 bảng, 1 FK vòng, 1 bảng append-only.",
+          "priority": "must",
+          "depends_on": [
+            "E00-02d"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E00-02f",
+          "title": "Migration bước 200 + 220: kỳ thưởng, dòng thưởng, 入金",
+          "discipline": "DB",
+          "description": "Bảng incentive_periods, incentive_lines, incentive_line_parts (CASCADE trước 確定), incentive_deltas, payment_import_batches, payments (dòng đảo 取消).",
+          "acceptance": [
+            "CHECK trạng thái kỳ 未計算 / 試算済 / 確定",
+            "payments mã tham chiếu trùng bị UNIQUE chặn; dòng đảo trỏ được về dòng gốc",
+            "Test pgTAP cho CHECK, UNIQUE, CASCADE"
+          ],
+          "spec_refs": [
+            "TBL-incentive_periods",
+            "TBL-incentive_lines",
+            "TBL-incentive_line_parts",
+            "TBL-incentive_deltas",
+            "TBL-payment_import_batches",
+            "TBL-payments"
+          ],
+          "hours": 8,
+          "hours_basis": "6 bảng tiền, số học numeric chính xác và CASCADE có điều kiện.",
+          "priority": "must",
+          "depends_on": [
+            "E00-02e"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E00-02g",
+          "title": "Migration bước 230–260: thông báo, xuất kế toán, đồng bộ offline, cảnh báo vận hành",
+          "discipline": "DB",
+          "description": "Bảng notification_settings, notifications, notification_dispatches, accounting_export_batches, accounting_export_lines, sync_operations (client_op_id UNIQUE), ops_alerts. Bảng audit_logs / audit_log_archives làm ở E00-03a.",
+          "acceptance": [
+            "CHECK trạng thái dispatch, batch kế toán, sync_operations, ops_alerts đúng danh sách DB-TABLES-LIST §5",
+            "accounting_export_batches chỉ 1 batch hợp lệ / 業務日 (partial unique)",
+            "Test pgTAP cho CHECK và partial unique"
+          ],
+          "spec_refs": [
+            "TBL-notification_settings",
+            "TBL-notifications",
+            "TBL-notification_dispatches",
+            "TBL-accounting_export_batches",
+            "TBL-accounting_export_lines",
+            "TBL-sync_operations",
+            "TBL-ops_alerts"
+          ],
+          "hours": 8,
+          "hours_basis": "7 bảng cấu trúc đơn giản, chủ yếu CHECK và 1 partial unique.",
+          "priority": "must",
+          "depends_on": [
+            "E00-02a"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E00-02h",
+          "title": "Migration bước 270: bảng migration và dữ liệu cũ",
+          "discipline": "DB",
+          "description": "Bảng migration_runs, migration_reconciliations, migration_id_maps, migration_row_errors, legacy_settlement_rows, legacy_delivery_rows (chỉ tham chiếu, không FK business_days).",
+          "acceptance": [
+            "6 bảng tạo được, CHECK trạng thái migration_runs đúng danh sách",
+            "Test pgTAP tồn tại bảng + CHECK"
+          ],
+          "spec_refs": [
+            "TBL-migration_runs",
+            "TBL-migration_reconciliations",
+            "TBL-migration_id_maps",
+            "TBL-migration_row_errors",
+            "TBL-legacy_settlement_rows",
+            "TBL-legacy_delivery_rows"
+          ],
+          "hours": 4,
+          "hours_basis": "6 bảng tham chiếu, gần như không ràng buộc chéo.",
+          "priority": "must",
+          "depends_on": [
+            "E00-02a"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E00-03",
+      "title": "Hiện thực ghi audit append-only (thành công trong DB, bị từ chối ở API)",
+      "discipline": "DB",
+      "description": "Nền tảng ghi audit dùng bởi mọi hàm nghiệp vụ: bảng audit_logs có chuỗi hash, hàm audit_append trong cùng transaction, writeAuditLog TypeScript cho lần bị từ chối. Kiểm chuỗi hằng ngày, archive, tra cứu thuộc E10.",
+      "acceptance": [
+        "Mọi hàm nghiệp vụ gọi được audit_append làm lệnh cuối",
+        "Lần bị từ chối 403/409/422 có dòng outcome = 拒否"
+      ],
+      "spec_refs": [
+        "ADR-008",
+        "DD-F031-audit-append-search-archive"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — giờ ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E00-02a"
+      ],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E00-03a",
+          "title": "Tạo bảng audit_logs / audit_log_archives và hàm audit_append có chuỗi hash",
+          "discipline": "DB",
+          "description": "Migration bước 250: audit_logs (prev_hash, row_hash, partition tháng), audit_log_archives; trigger chặn UPDATE/DELETE, REVOKE; audit_append security definer giữ advisory lock audit_chain, tính row_hash = SHA-256(prev_hash + nội dung chuẩn hóa).",
+          "acceptance": [
+            "UPDATE/DELETE audit_logs bằng mọi role ứng dụng bị chặn",
+            "50 transaction song song gọi audit_append tạo chuỗi liên tục, không nhánh",
+            "Rollback transaction nghiệp vụ → không còn dòng audit",
+            "Test pgTAP kiểm hash tính lại khớp"
+          ],
+          "spec_refs": [
+            "FN-audit-audit_append",
+            "TBL-audit_logs",
+            "TBL-audit_log_archives",
+            "ADR-008",
+            "DB-INITIAL-DATA"
+          ],
+          "hours": 12,
+          "hours_basis": "Hash chain + advisory lock tuần tự hóa + partition; phải test tương tranh.",
+          "priority": "must",
+          "depends_on": [
+            "E00-02a"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E00-03b",
+          "title": "Viết writeAuditLog cho lần bị từ chối và sự kiện bảo mật",
+          "discipline": "BE",
+          "description": "Hàm TypeScript gọi audit_append ngoài transaction đã rollback với outcome 拒否 (action <entity>.<verb>, request_id, lý do lỗi); lỗi ghi audit → thao tác trả 500 M_17 (không có thay đổi không log).",
+          "acceptance": [
+            "Route trả 422 sau rollback có đúng 1 dòng audit 拒否",
+            "audit_append lỗi → response 500 M_17",
+            "Vitest với mock RPC cho 2 nhánh"
+          ],
+          "spec_refs": [
+            "FN-common-writeAuditLog",
+            "FN-audit-audit_append",
+            "COMMON-SPEC"
+          ],
+          "hours": 4,
+          "hours_basis": "1 hàm wrapper, 2 nhánh chính.",
+          "priority": "must",
+          "depends_on": [
+            "E00-03a",
+            "E00-08"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E00-04",
+      "title": "Hiện thực tải tệp đính kèm ATT-01 / ATT-02 dùng chung cho các màn",
+      "discipline": "BE",
+      "description": "Luồng signed upload URL → PUT thẳng Storage → kiểm object → file ref (chế độ A) hoặc gắn cha có sẵn (chế độ B). ATT-03〜06, JOB-02〜04 (tải xuống, lưu trữ lạnh, dọn vùng tạm) thuộc E11.",
+      "acceptance": [
+        "Các API cha ELG-01, ELG-05, LOT-02, LOT-06, DLV-03, DLV-05, COR-02, COR-07, DSP-02, DSP-05 dùng chung 1 helper kiểm file ref",
+        "Tệp ngoài PDF / JPG / PNG hoặc > 10 MB không vào được Storage"
+      ],
+      "spec_refs": [
+        "DD-F035-attachment-upload-archive-restore",
+        "ATT-01",
+        "ATT-02"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — giờ ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E00-14",
+        "E00-02b"
+      ],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E00-04a",
+          "title": "Viết ATT-01 cấp signed upload URL vào vùng tạm",
+          "discipline": "BE",
+          "description": "POST /api/attachments: kiểm file_name, content_type, size_bytes; giới hạn 20 URL chưa hoàn tất / giờ / người; tạo signed upload URL dùng 1 lần tới uploads/<uploaded_by>/<upload_id>.<ext>; bị từ chối ghi audit 拒否.",
+          "acceptance": [
+            "content_type ngoài 3 loại → 400 M_14; > 10 MB → 400 M_13",
+            "Lần thứ 21 trong 1 giờ → 422 M_ATT_53",
+            "ROLE-006〜012 → 403 M_19",
+            "Vitest cho các nhánh trên"
+          ],
+          "spec_refs": [
+            "ATT-01",
+            "DD-F035-attachment-upload-archive-restore",
+            "TBL-attachments"
+          ],
+          "hours": 4,
+          "hours_basis": "1 route, kiểm khai báo + rate limit đơn giản.",
+          "priority": "must",
+          "depends_on": [
+            "E00-07",
+            "E00-08",
+            "E00-03b"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E00-04b",
+          "title": "Viết ATT-02 chế độ A: kiểm object, cấp file token và helper kiểm file ref cho API cha",
+          "discipline": "BE",
+          "description": "Đọc stream object ngoài transaction: đếm byte, magic byte, SHA-256; lệch → xóa object + 422 M_ATT_80; cấp file_token HMAC hạn 24 giờ. Helper verifyFileRefs(attachments, user) cho API cha: kiểm token, người gọi, hạn, trả danh sách dòng attachments (retention_class theo entity, online_until 7 / 3 năm) để insert cùng transaction với cha.",
+          "acceptance": [
+            "Object lệch size / magic byte / hash → bị xóa và 422 M_ATT_80",
+            "Object quá 24 giờ → 409 M_ATT_83; object của người khác → 404 M_15",
+            "Token sửa 1 ký tự hoặc dùng bởi người khác → 422 M_ATT_50",
+            "retention_class map đúng 10 loại entity",
+            "Vitest phủ helper và route"
+          ],
+          "spec_refs": [
+            "ATT-02",
+            "DD-F035-attachment-upload-archive-restore",
+            "TBL-attachments"
+          ],
+          "hours": 8,
+          "hours_basis": "Xử lý stream + HMAC + 6 nhánh lỗi + helper dùng lại bởi 10 API cha.",
+          "priority": "must",
+          "depends_on": [
+            "E00-04a"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E00-04c",
+          "title": "Viết hàm attachment_register và ATT-02 chế độ B (gắn vào cha có sẵn)",
+          "discipline": "DB",
+          "description": "Hàm PL/pgSQL attachment_register: khóa cha FOR SHARE, đếm tệp FOR UPDATE (≤ 5), kiểm trạng thái cha (lô 取消, không phải người ghi, quá 24 giờ → M_ATT_52), insert attachments, audit_append(attachment.attach). Route ATT-02 nhánh có entity/entity_id gọi hàm này.",
+          "acceptance": [
+            "Tệp thứ 6 → 422 M_06",
+            "Vai trò không được gắn vào loại cha → 403",
+            "2 request song song gắn tệp thứ 5 và 6 → chỉ 1 thành công",
+            "pgTAP cho từng nhánh lỗi + audit"
+          ],
+          "spec_refs": [
+            "FN-attachment-attachment_register",
+            "ATT-02",
+            "TBL-attachments",
+            "TBL-lots",
+            "TBL-lot_inspections",
+            "TBL-delivery_exceptions"
+          ],
+          "hours": 8,
+          "hours_basis": "Khóa theo thứ tự + đếm có tương tranh + 3 loại cha.",
+          "priority": "must",
+          "depends_on": [
+            "E00-04b",
+            "E00-03a"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E00-04d",
+          "title": "Dựng component tải tệp dùng chung trên màn",
+          "discipline": "FE",
+          "description": "Component chọn tệp (PC + tablet), kiểm loại/kích thước phía client, gọi ATT-01 → PUT → tính SHA-256 bằng Web Crypto → ATT-02, hiển thị tiến độ / lỗi theo message ID, trả danh sách file ref cho form cha; tối đa 5 tệp.",
+          "acceptance": [
+            "Chọn tệp sai loại báo lỗi ngay, không gọi API",
+            "Lỗi mạng giữa chừng cho phép thử lại tệp đó",
+            "Vùng chạm ≥ 56 px khi dùng ở màn tablet đeo găng",
+            "Vitest / testing-library cho các trạng thái"
+          ],
+          "spec_refs": [
+            "ATT-01",
+            "ATT-02",
+            "COMMON-SPEC",
+            "SCR-009",
+            "SCR-020"
+          ],
+          "hours": 8,
+          "hours_basis": "3 bước bất đồng bộ + trạng thái tiến độ / lỗi / thử lại.",
+          "priority": "must",
+          "depends_on": [
+            "E00-04b",
+            "E00-12b"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E00-05",
+      "title": "Dựng khung job pg_cron + pg_net + job_runs",
+      "discipline": "DB",
+      "description": "Khung chung cho mọi job ADR-009: ghi job_runs theo slot, idempotent, gọi endpoint nội bộ bằng pg_net với secret từ Vault, callback ghi kết quả. Hàm job nghiệp vụ cụ thể thuộc epic của nó.",
+      "acceptance": [
+        "1 job mẫu chạy theo lịch ghi đủ trạng thái 実行中 → 成功 / 失敗",
+        "Endpoint nội bộ thiếu secret → 401"
+      ],
+      "spec_refs": [
+        "ADR-009",
+        "TBL-job_runs",
+        "DD-F004-eligibility-daily-expiry-job"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — giờ ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E00-02b",
+        "E00-14"
+      ],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E00-05a",
+          "title": "Viết wrapper chạy job trong DB và migration lịch pg_cron",
+          "discipline": "DB",
+          "description": "Hàm run_job(job_name, scheduled_for) mở dòng job_runs 実行中, gọi hàm job, ghi 成功 / 失敗 + processed_count / error_count / error_message; chặn chạy trùng slot đã 成功; helper gọi pg_net với Bearer CRON_SECRET đọc từ Vault; migration bước 400 đăng ký lịch UTC cho 13 job (chỉ đăng ký khi hàm job tồn tại).",
+          "acceptance": [
+            "Chạy lại cùng slot đã 成功 không tạo kết quả trùng",
+            "Hàm job raise exception → job_runs 失敗 có error_message, transaction nghiệp vụ rollback",
+            "Lịch cron đúng bảng ADR-009 (kiểm cron.job)",
+            "pgTAP cho 3 nhánh trên"
+          ],
+          "spec_refs": [
+            "ADR-009",
+            "TBL-job_runs",
+            "DB-INITIAL-DATA"
+          ],
+          "hours": 8,
+          "hours_basis": "Wrapper chung + idempotent theo slot + tích hợp Vault/pg_net.",
+          "priority": "must",
+          "depends_on": [
+            "E00-02b",
+            "E00-14"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E00-05b",
+          "title": "Viết guard endpoint /api/internal/jobs/* và hàm job_run_complete",
+          "discipline": "BE",
+          "description": "Guard Bearer CRON_SECRET (so sánh thời gian hằng) cho nhóm JOB và OPS-01; base handler nhận job_run_id, xử lý, gọi rpc job_run_complete; hàm job_run_complete chặn ghi lượt đã kết thúc (409 M_JOB_50).",
+          "acceptance": [
+            "Thiếu / sai secret → 401, không chạm DB",
+            "Gọi complete 2 lần cho cùng lượt → lần 2 trả 409 M_JOB_50",
+            "Vitest + pgTAP cho các nhánh"
+          ],
+          "spec_refs": [
+            "FN-ops-job_run_complete",
+            "JOB-04",
+            "JOB-05",
+            "JOB-06",
+            "JOB-07",
+            "ADR-009"
+          ],
+          "hours": 8,
+          "hours_basis": "Guard + handler mẫu + 1 hàm DB có kiểm trạng thái lượt.",
+          "priority": "must",
+          "depends_on": [
+            "E00-05a",
+            "E00-08"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E00-06",
+      "title": "Áp RLS deny-all và quyền thực thi hàm cho mọi bảng",
+      "discipline": "DB",
+      "description": "Migration bước 300: enable row level security cho mọi bảng public, không tạo policy; REVOKE EXECUTE hàm nghiệp vụ khỏi anon/authenticated, GRANT cho service_role; audit_append là security definer. Có script kiểm dùng lại ở CI.",
+      "acceptance": [
+        "Truy vấn pg_policies trên schema public trả 0 dòng",
+        "Mọi bảng public có relrowsecurity = true",
+        "Gọi rpc bằng anon key bị từ chối; bằng service role thành công",
+        "Test pgTAP tự động liệt kê bảng thiếu RLS → fail"
+      ],
+      "spec_refs": [
+        "ADR-001",
+        "DB-TABLES-LIST",
+        "DB-INITIAL-DATA"
+      ],
+      "hours": 4,
+      "hours_basis": "Câu lệnh lặp theo danh mục bảng/hàm + 1 test tổng quát.",
+      "priority": "must",
+      "depends_on": [
+        "E00-02"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E00-07",
+      "title": "Hiện thực guard requireApiUser và middleware phiên",
+      "discipline": "BE",
+      "description": "Middleware Next.js chặn trang khi chưa có phiên (CS-01, chuyển /login?next=). Hàm requireApiUser(roles) kiểm getUser(), tài khoản bị ngưng (CS-26), khóa tạm, AAL2 cho ROLE-006〜009, vai trò từ user_roles (nhiều vai trò), trả user_id / roles / participant_id / request_id cho route. Chưa gồm luồng đăng nhập (E01).",
+      "acceptance": [
+        "Chưa đăng nhập: trang → redirect /login?next=…, API → 401 M_COM_01",
+        "ROLE-006〜009 phiên aal1 gọi API nghiệp vụ → 401 M_COM_06",
+        "Tài khoản ngưng → 403 M_COM_24 và hủy phiên",
+        "Vai trò không nằm trong danh sách → 403 M_19",
+        "Người giữ 2 vai trò được nhận quyền hợp của cả hai",
+        "Vitest phủ từng nhánh trên"
+      ],
+      "spec_refs": [
+        "FN-common-requireApiUser",
+        "DD-F001-login-mfa-lockout",
+        "COMMON-SPEC",
+        "TBL-profiles",
+        "TBL-user_roles",
+        "TBL-roles",
+        "ADR-001"
+      ],
+      "hours": 12,
+      "hours_basis": "5 nhánh kiểm (phiên, ngưng, khóa, AAL2, vai trò) + middleware + tích hợp Supabase SSR cookie.",
+      "priority": "must",
+      "depends_on": [
+        "E00-01",
+        "E00-02a"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E00-08",
+      "title": "Viết helper API dùng chung: map lỗi RPC, envelope, validate, chống CSRF",
+      "discipline": "BE",
+      "description": "jsonFromRpcError map BIZ→422, CONFLICT→409, NOTFOUND→404, FORBIDDEN→403, khác→500 M_17 kèm request_id; envelope {data} / {errors:[{error_code,error_description,error_extra}]}; bộ schema validate (bắt buộc, độ dài, ngày, tiền, chuẩn hóa số toàn giác); kiểm header Origin cho request ghi.",
+      "acceptance": [
+        "Chuỗi 'BIZ:M_LOT_03|…' → 422 với error_code M_LOT_03 và detail JSON đưa vào error_extra",
+        "Lỗi không nhận dạng → 500 M_17, không lộ thông điệp DB",
+        "Request ghi có Origin khác origin app → 403",
+        "Vitest phủ mọi tiền tố lỗi và validator"
+      ],
+      "spec_refs": [
+        "FN-common-jsonFromRpcError",
+        "API-COMMON-CONVENTIONS",
+        "API-STATUS-CODES",
+        "COMMON-MESSAGE-LIST"
+      ],
+      "hours": 8,
+      "hours_basis": "5 tiền tố lỗi + bộ validator dùng chung + kiểm Origin; logic rõ, nhiều case test.",
+      "priority": "must",
+      "depends_on": [
+        "E00-01"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E00-09",
+      "title": "Hiện thực lưu và phát lại Idempotency-Key cho API ghi",
+      "discipline": "BE",
+      "description": "Wrapper route: kiểm header Idempotency-Key (UUID v4), lưu key + hash payload + response; cùng key cùng payload → trả response cũ + Idempotent-Replayed: true; khác payload → 409 M_COM_17. Dùng bắt buộc cho TRD-03, khuyến nghị cho POST tạo mới. LOT-02 / DLV-03 dùng sync_operations (E11). Nơi lưu chưa có trong DB design — chờ chốt (xem spec_gaps).",
+      "acceptance": [
+        "Gửi lại cùng key + cùng payload trả đúng body/HTTP cũ và header Idempotent-Replayed",
+        "Cùng key khác payload → 409 M_COM_17, không gọi hàm DB",
+        "Thiếu key ở route bắt buộc → 400 M_01",
+        "Key hết hạn theo thời gian giữ ADR-006 thì được xóa",
+        "Vitest + test tích hợp với 2 request song song cùng key chỉ 1 lần gọi RPC"
+      ],
+      "spec_refs": [
+        "API-COMMON-CONVENTIONS",
+        "TRD-03",
+        "ADR-006"
+      ],
+      "hours": 8,
+      "hours_basis": "Có tương tranh (2 request cùng key) cần khóa / unique; cần thêm 1 bảng nhỏ ngoài thiết kế.",
+      "priority": "must",
+      "depends_on": [
+        "E00-08",
+        "E00-02g"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E00-10",
+      "title": "Viết hàm 業務日 và cấp mã nghiệp vụ dùng chung",
+      "discipline": "DB",
+      "description": "jst_today() (DB), ensure_business_day_open(d) khóa business_days FOR SHARE (không có dòng / 休市日 → M_LOT_03, 締め済 → M_COM_09), next_business_no(prefix, d) theo tiền tố × ngày dạng {P}-{YYYYMMDD}-{5 số} khóa dòng bộ đếm; getBusinessDay() TypeScript chỉ đọc cho AUTH-05 / DASH-01.",
+      "acceptance": [
+        "jst_today trả ngày JST đúng ở biên 14:59 / 15:00 UTC",
+        "ensure_business_day_open trả đúng 3 nhánh lỗi",
+        "100 lời gọi song song next_business_no cùng tiền tố/ngày không trùng số, số 99,999 → lỗi rõ ràng",
+        "Mỗi tiền tố đếm độc lập (L và T cùng ngày đều bắt đầu từ 00001)",
+        "pgTAP + Vitest cho getBusinessDay"
+      ],
+      "spec_refs": [
+        "FN-common-jst_today",
+        "FN-common-ensure_business_day_open",
+        "FN-common-next_business_no",
+        "FN-common-getBusinessDay",
+        "TBL-business_days",
+        "TBL-business_no_counters",
+        "PREMISE"
+      ],
+      "hours": 8,
+      "hours_basis": "4 hàm nhỏ nhưng có tương tranh bộ đếm và biên múi giờ phải test.",
+      "priority": "must",
+      "depends_on": [
+        "E00-02c"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E00-11",
+      "title": "Nạp dữ liệu master khởi tạo: vai trò, tài khoản ROLE-009, lịch 業務日",
+      "discipline": "DB",
+      "description": "Seed bước 900 idempotent: 12 dòng roles (MFA, auth_policy, timeout); script tạo 2 tài khoản ROLE-009 qua Supabase Admin API; script nạp lịch business_days từ CSV lịch chợ (is_holiday), chạy lại không trùng. Rule v1 thuộc E07, cấu hình thông báo thuộc E08.",
+      "acceptance": [
+        "Chạy seed 2 lần không lỗi, không trùng",
+        "Script lịch từ chối CSV có ngày trùng / sai định dạng và báo dòng lỗi",
+        "Seed ghi 1 dòng audit lý do go-live baseline",
+        "Có lệnh seed dữ liệu giả cho dev/staging tách khỏi seed prod"
+      ],
+      "spec_refs": [
+        "DB-INITIAL-DATA",
+        "TBL-roles",
+        "TBL-business_days",
+        "TBL-user_roles",
+        "PREMISE"
+      ],
+      "hours": 8,
+      "hours_basis": "3 script nhỏ, có kiểm đầu vào CSV lịch và tính idempotent.",
+      "priority": "must",
+      "depends_on": [
+        "E00-02c",
+        "E00-03a"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E00-12",
+      "title": "Dựng UI shell và thành phần dùng chung theo Common_Spec",
+      "discipline": "FE",
+      "description": "Khung ứng dụng sau đăng nhập và các hành vi CS-xx dùng chung cho 37 màn, để màn nghiệp vụ chỉ còn nội dung riêng.",
+      "acceptance": [
+        "Màn mới chỉ cần khai báo route + quyền là có header, menu, 403, xử lý lỗi chuẩn"
+      ],
+      "spec_refs": [
+        "COMMON-SPEC",
+        "SCREEN-LIST",
+        "COMMON-MESSAGE-LIST"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — giờ ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E00-01"
+      ],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E00-12a",
+          "title": "Dựng layout, header 業務日, menu theo vai trò, trang 403",
+          "discipline": "FE",
+          "description": "Layout chung: header tên hệ thống, 業務日 YYYY/MM/DD（曜）+ badge 開 / 締め済 (CS-07), chuông thông báo, tên + vai trò, nút ログアウト; menu lấy từ AUTH-05 (không suy ở client) theo bảng menu README §3; menu nút lớn trên tablet; trang 403 M_COM_08; dialog cảnh báo hết phiên CS-02.",
+          "acceptance": [
+            "Menu từng vai trò khớp bảng README §3 (test snapshot 12 vai trò)",
+            "Mở URL ngoài quyền → trang 403, không gọi API nghiệp vụ",
+            "Badge 業務日 cập nhật khi focus lại tab",
+            "Dialog M_COM_07 hiện trước hết phiên 2 phút, nút 延長 hoạt động"
+          ],
+          "spec_refs": [
+            "COMMON-SPEC",
+            "SCREEN-LIST",
+            "AUTH-05"
+          ],
+          "hours": 12,
+          "hours_basis": "12 biến thể menu + 2 kiểu thiết bị + timer hết phiên.",
+          "priority": "must",
+          "depends_on": [
+            "E00-01"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E00-12b",
+          "title": "Viết fetchJson client và xử lý lỗi / chống gửi đôi chuẩn",
+          "discipline": "FE",
+          "description": "Wrapper fetch: timeout 10 giây (CS-12), map 400/422 → lỗi theo ô + tóm tắt (CS-15), 401 → login / bước MFA (CS-16), 403 → trang 403, 409 → dialog M_COM_17 tải lại (CS-17), 500/503 (CS-18); sinh Idempotency-Key 1 lần / thao tác, khóa nút khi đang gửi (CS-19); chỉ tự retry GET hoặc request có key.",
+          "acceptance": [
+            "Mỗi mã HTTP trên dẫn đúng hành vi UI (test bằng mock server)",
+            "Bấm nút 3 lần nhanh chỉ gửi 1 request",
+            "Phản hồi Idempotent-Replayed hiển thị M_COM_19 như thành công"
+          ],
+          "spec_refs": [
+            "COMMON-SPEC",
+            "API-COMMON-CONVENTIONS",
+            "API-STATUS-CODES"
+          ],
+          "hours": 8,
+          "hours_basis": "7 nhánh mã lỗi + chống gửi đôi; không có giao diện phức tạp.",
+          "priority": "must",
+          "depends_on": [
+            "E00-01"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E00-12c",
+          "title": "Dựng component nền: bảng danh sách, định dạng, bàn phím, chạm, rời màn",
+          "discipline": "FE",
+          "description": "Bảng danh sách phân trang 100 / tối đa 200, bộ lọc giữ trên query string (CS-20); trạng thái tải / rỗng / lỗi (CS-12〜14); định dạng ngày, tiền ¥, số lượng + đơn vị, chuẩn hóa số toàn giác (CS-21); thứ tự Tab, Enter, Ctrl+Enter, Esc, bẫy focus dialog (CS-09); chế độ chạm ≥ 44 / 56 px (CS-10); dialog rời màn khi có thay đổi (CS-24).",
+          "acceptance": [
+            "Định dạng đúng ví dụ CS-21 (test đơn vị)",
+            "Dialog bẫy focus, Esc đóng và trả focus",
+            "Kiểm tra axe không có lỗi mức A/AA trên component mẫu",
+            "Rời màn có dữ liệu chưa lưu hiện M_COM_21"
+          ],
+          "spec_refs": [
+            "COMMON-SPEC",
+            "SPEC-CONVENTIONS",
+            "NFR-DESIGN"
+          ],
+          "hours": 12,
+          "hours_basis": "6 nhóm hành vi chung, mỗi nhóm nhỏ nhưng cần test accessibility.",
+          "priority": "must",
+          "depends_on": [
+            "E00-01"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E00-12d",
+          "title": "Nạp danh mục thông báo M_* dùng chung cho client và server",
+          "discipline": "FE",
+          "description": "Sinh module message từ common-message-list (ID → văn bản tiếng Nhật có placeholder), dùng chung cho validate client và server để cùng message ID.",
+          "acceptance": [
+            "Mọi message ID dùng trong code tồn tại trong danh mục (test quét)",
+            "Placeholder thiếu tham số → lỗi khi test"
+          ],
+          "spec_refs": [
+            "COMMON-MESSAGE-LIST"
+          ],
+          "hours": 4,
+          "hours_basis": "Chuyển dữ liệu bảng sang module + 1 test quét.",
+          "priority": "must",
+          "depends_on": [
+            "E00-01"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E00-13",
+      "title": "Dựng CI/CD GitHub Actions và kiểm tĩnh bảo mật",
+      "discipline": "INFRA",
+      "description": "Pipeline PR, kiểm tĩnh quy tắc kiến trúc và deploy staging / prod.",
+      "acceptance": [
+        "PR không merge được khi CI đỏ"
+      ],
+      "spec_refs": [
+        "ARCH-OVERVIEW",
+        "ADR-001",
+        "ADR-002"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — giờ ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E00-01"
+      ],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E00-13a",
+          "title": "Viết workflow CI: typecheck, lint, Vitest, pgTAP trên Supabase local",
+          "discipline": "INFRA",
+          "description": "Workflow chạy trên mọi PR: cài phụ thuộc có cache, tsc --noEmit, ESLint, Vitest có coverage, supabase start + db reset + pgTAP.",
+          "acceptance": [
+            "PR có lỗi type / lint / test / pgTAP → job đỏ",
+            "Thời gian chạy CI ≤ 15 phút với cache",
+            "Branch protection yêu cầu CI xanh"
+          ],
+          "spec_refs": [
+            "ARCH-OVERVIEW"
+          ],
+          "hours": 8,
+          "hours_basis": "4 bước chuẩn; phần khó là chạy Supabase local trong runner.",
+          "priority": "must",
+          "depends_on": [
+            "E00-01"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E00-13b",
+          "title": "Viết script kiểm tĩnh: route có guard, pg_policies = 0, không lộ service key",
+          "discipline": "INFRA",
+          "description": "Script quét app/api/**/route.ts: mọi handler gọi requireApiUser (trừ OPS-01 và /api/internal/jobs/* dùng guard secret); kiểm pg_policies = 0 sau migration; chặn biến NEXT_PUBLIC_* chứa key Supabase.",
+          "acceptance": [
+            "Thêm route thiếu guard → CI đỏ chỉ ra file",
+            "Tạo 1 policy RLS → CI đỏ",
+            "Script có test riêng"
+          ],
+          "spec_refs": [
+            "ARCH-OVERVIEW",
+            "ADR-001",
+            "FN-common-requireApiUser"
+          ],
+          "hours": 4,
+          "hours_basis": "3 kiểm tra quét tĩnh đơn giản.",
+          "priority": "must",
+          "depends_on": [
+            "E00-13a",
+            "E00-07",
+            "E00-06"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E00-13c",
+          "title": "Viết workflow CD: tự deploy staging, deploy prod theo tag ngoài 02:00–10:00 JST",
+          "discipline": "INFRA",
+          "description": "Merge main → Vercel staging + supabase db push staging; tag release → prod, chặn khi giờ JST trong 02:00–10:00 (trừ cờ hotfix có duyệt); migration forward-only, kiểm không có migration sửa file cũ.",
+          "acceptance": [
+            "Chạy workflow prod trong khung 02:00–10:00 JST bị chặn",
+            "Sửa file migration đã merge → CI đỏ",
+            "Rollback app bằng Vercel instant rollback có hướng dẫn trong runbook"
+          ],
+          "spec_refs": [
+            "ARCH-OVERVIEW",
+            "ADR-002"
+          ],
+          "hours": 8,
+          "hours_basis": "2 môi trường + chặn khung giờ + kiểm migration forward-only.",
+          "priority": "must",
+          "depends_on": [
+            "E00-13a",
+            "E00-14"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E00-14",
+      "title": "Dựng môi trường dev / staging / prod tại Tokyo (chuyển region khỏi eu-west-1)",
+      "discipline": "INFRA",
+      "description": "Tạo 3 project Supabase Pro region ap-northeast-1 (bật PITR 7 ngày ở prod, Supavisor transaction pooler port 6543) và 3 Vercel environment region hnd1; đặt secret ở Vercel env (tách staging/prod) và Supabase Vault (CRON_SECRET cho pg_net); tạo bucket private attachments, exports, audit-archive, cold-archive. Prototype eu-west-1 không nâng cấp, không migrate dữ liệu mock.",
+      "acceptance": [
+        "3 project Supabase đều ở ap-northeast-1, Vercel function region = hnd1 (kiểm qua dashboard / header phản hồi)",
+        "Prod bật PITR; kết nối app dùng pooler port 6543",
+        "4 bucket ở chế độ private, truy cập không chữ ký trả 400/403",
+        "Không có secret nào trong repo; service role key không có tiền tố NEXT_PUBLIC_",
+        "Ghi runbook ngắn: cách tạo lại môi trường và vị trí từng secret"
+      ],
+      "spec_refs": [
+        "ADR-002",
+        "ADR-001",
+        "ADR-009",
+        "ARCH-OVERVIEW"
+      ],
+      "hours": 12,
+      "hours_basis": "3 môi trường × 2 nền tảng + Vault + 4 bucket; thao tác cấu hình nhiều bước nhưng không có code phức tạp.",
+      "priority": "must",
+      "depends_on": [
+        "E00-01"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E00-15",
+      "title": "Viết logger JSON có request_id theo quy ước log",
+      "discipline": "BE",
+      "description": "Logger server dùng chung: JSON một dòng, request_id sinh ở middleware và trả header, user_id, route, ms, category, mức log; lọc nội dung cấm (dữ liệu cá nhân, tên tệp, mật khẩu, token) theo logs-convention.",
+      "acceptance": [
+        "Mọi response API có header request_id trùng với log",
+        "Truyền object có trường password / email vào logger → bị che",
+        "Vitest cho bộ lọc"
+      ],
+      "spec_refs": [
+        "DD-LOGS",
+        "ARCH-OVERVIEW"
+      ],
+      "hours": 4,
+      "hours_basis": "1 module nhỏ + danh sách khóa cấm.",
+      "priority": "should",
+      "depends_on": [
+        "E00-01"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E00-16",
+      "title": "Viết bộ fixture dữ liệu test dùng chung cho pgTAP và Vitest",
+      "discipline": "DB",
+      "description": "Hàm tạo dữ liệu test: người dùng theo vai trò, người tham gia 4 loại kèm kỳ hiệu lực, 業務日 mở / khóa / 休市日, lô 公開, giao dịch 確定; dùng lại bởi test mọi epic, không dùng dữ liệu thật.",
+      "acceptance": [
+        "1 lệnh tạo bộ dữ liệu chuẩn trong transaction test và tự rollback",
+        "Có ví dụ dùng fixture trong 1 test pgTAP và 1 test Vitest"
+      ],
+      "spec_refs": [
+        "DB-TABLES-LIST",
+        "FN-LIST"
+      ],
+      "hours": 8,
+      "hours_basis": "Nhiều bảng liên quan nhưng chỉ là insert theo thứ tự FK.",
+      "priority": "should",
+      "depends_on": [
+        "E00-02"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    }
+  ],
+  "spec_not_issued": [
+    {
+      "spec": "ATT-03〜06, JOB-02〜04, FN-attachment-attachment_cold_archive / attachment_restore / *_record_result",
+      "reason": "Tải xuống, lưu trữ lạnh, dọn vùng tạm, khôi phục thuộc F-035 → E11; E00 chỉ làm phần tải lên ATT-01 / ATT-02 mà mọi API cha cần."
+    },
+    {
+      "spec": "FN-audit-audit_chain_verify, audit_archive_record, JOB-07, AUD-01〜03",
+      "reason": "Kiểm chuỗi, archive, tra cứu audit thuộc F-031 / F-032 → E10."
+    },
+    {
+      "spec": "FN-notification-notify_event (outbox)",
+      "reason": "Thuộc F-026 → E08; nhiều hàm E02–E05 gọi hàm này nên E08 cần làm sớm."
+    },
+    {
+      "spec": "Seed rule_versions v1 + rule_rate_tiers, seed notification_settings 11 dòng (DB-INITIAL-DATA §2.3, §2.5)",
+      "reason": "Dữ liệu nghiệp vụ của E07 / E08, để epic đó nạp cùng hàm dùng nó."
+    },
+    {
+      "spec": "JOB-06 db_dump_offsite, bản sao DR Osaka (ADR-002 Decision 5)",
+      "reason": "Thuộc giám sát / DR F-034, NFR-003 → E11; còn chờ khách chấp nhận RPO 1 ngày (OQ-04)."
+    },
+    {
+      "spec": "PWA service worker + IndexedDB queue (ADR-006)",
+      "reason": "Thuộc F-033 → E11."
+    },
+    {
+      "spec": "Load test năm 3, diễn tập restore, cấu hình uptime monitor ngoài",
+      "reason": "Thuộc ST / vận hành (ngoài phạm vi lập trình + unit test) hoặc E11."
+    }
+  ],
+  "spec_gaps": [
+    {
+      "spec": "API-COMMON-CONVENTIONS No.14 / TRD-03 bước 3, 6",
+      "gap": "Yêu cầu server lưu Idempotency-Key + hash payload + response cho TRD-03 (và khuyến nghị cho mọi POST tạo mới), nhưng DB design không có bảng nào cho việc này; sync_operations chỉ phục vụ LOT-02 / DLV-03 offline.",
+      "proposal": "sửa thiết kế",
+      "note": "Đề xuất thêm TBL-api_idempotency_keys (key, user_id, route, payload_hash, response_status, response_body, expires_at) hoặc mở rộng sync_operations; cần chốt trước khi làm E00-09."
+    },
+    {
+      "spec": "ADR-009 bảng job vs FN-LIST",
+      "gap": "Job sync_operations_purge (11:30) có trong lịch ADR-009 và DB-INITIAL-DATA §2.6 nhưng không có function spec; job attachment_temp_purge cũng chưa có FN riêng (chỉ JOB-04).",
+      "proposal": "issue làm rõ",
+      "note": "E11 bổ sung FN trước khi làm job; E00-05a chỉ đăng ký lịch khi hàm tồn tại."
+    },
+    {
+      "spec": "DB-TABLES-LIST vs ADR-009 Decision 2",
+      "gap": "ADR-009 đặt tên hàm job dạng job_<tên>(), FN-LIST §4 chốt tên = job_name; migration lịch cần một tên duy nhất.",
+      "proposal": "giả định",
+      "note": "Theo FN-LIST §4 (tên chốt); wrapper run_job gọi theo job_name."
+    },
+    {
+      "spec": "DB-INITIAL-DATA §1 bước 100",
+      "gap": "Bước 100 chỉ liệt kê pgcrypto, btree_gist, pg_cron; ADR-009 cần thêm pg_net và Supabase Vault để gọi endpoint nội bộ.",
+      "proposal": "sửa thiết kế",
+      "note": "Bổ sung pg_net (và vault) vào bước 100."
+    },
+    {
+      "spec": "DB-TABLES-LIST §3",
+      "gap": "Tiêu đề nói 44 bảng, tổng ghi 46 bảng, đánh số nhảy (No.45 Cancelled nằm sau No.47).",
+      "proposal": "sửa thiết kế",
+      "note": "Chỉ là lỗi trình bày; E00-02 làm theo danh sách file tbl-*.md (46 bảng hiệu lực)."
+    }
+  ]
+}

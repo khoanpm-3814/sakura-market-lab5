@@ -1,0 +1,1247 @@
+{
+  "E00-01": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E00-02a": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E00-08": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E00-12a": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E00-12b": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E00-12c": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E00-12d": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E00-13a": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E00-14": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E00-15": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E00-02b": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E00-02c": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E00-02g": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E00-02h": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E00-03a": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E00-07": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E11-09": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E00-02d": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E00-03b": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E00-09": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E01-04": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E01-07a": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E01-07e": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E02-02a": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E09-01": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E09-13": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E11-13": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E10-08": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E00-04a": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E09-04a": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E10-11": {
+    "Iteration": "Sprint 1",
+    "Phụ trách (giả định)": "QA-1"
+  },
+  "E00-02e": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E00-04b": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E00-05a": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E00-10": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E00-11": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E00-13c": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E01-01a": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E01-07b": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E02-01": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E03-01": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E03-08": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E04-06": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E09-04c": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E11-01": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E11-28": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E00-04d": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E00-05b": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E01-01b": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E01-05": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E01-07c": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E01-07d": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E02-02b": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E03-02": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E03-03": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E03-05": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E03-07": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E03-09": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E03-10a": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E04-07": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E04-08": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E11-05": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E01-07f": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E02-02c": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E02-02d": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E03-10c": {
+    "Iteration": "Sprint 2",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E00-02f": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E00-04c": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E01-02": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E01-03": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E01-07g": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E02-02e": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E02-03a": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E02-04a": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E02-05": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E02-06": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E03-04": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E03-06": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E04-01": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E04-10": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E04-11": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E04-13": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E05-04": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E05-05": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E09-02": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E09-03a": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E09-03b": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E09-03e": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E10-03": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E11-02": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E11-06a": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E11-12": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E11-14": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E11-20": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E11-29": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E11-30": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E01-06": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E02-04b": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E03-10b": {
+    "Iteration": "Sprint 3",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E00-06": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E02-03b": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E02-03c": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E02-07a": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E04-02": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E04-14a": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E04-15": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E04-16": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E05-07": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E05-08a": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E06-01a": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E06-06": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E07-01": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E07-03": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E08-01": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E08-02": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E09-03d": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E09-04b": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E09-05": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E09-10a": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E10-04": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E10-07": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E11-06b": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E11-19": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E11-23": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E11-31": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E11-33a": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E02-08a": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E11-18": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E02-03d": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E02-03e": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E04-03b": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E05-12": {
+    "Iteration": "Sprint 4",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E00-13b": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E02-07b": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E04-03a": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E04-04": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E05-06": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E06-01b": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E06-02": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E06-07": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E06-15": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E07-02": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E07-04a": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E07-12a": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E08-03": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E08-05": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E08-06": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E08-08": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E09-03c": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E09-04d": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E09-06": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E09-07": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E09-10b": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E10-01": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E11-24": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E11-25": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E11-32a": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E11-33b": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E02-08b": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E07-15": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E11-16": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E04-05": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E04-12a": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E06-03": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E06-08": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E06-09": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E06-17": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E08-07": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E09-09a": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E11-26": {
+    "Iteration": "Sprint 5",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E04-12b": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E04-12c": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E04-14b": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E06-04": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E06-10a": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E06-11": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E06-16": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E06-18": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E07-04b": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E07-04d": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E07-09a": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E07-12b": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E07-12d": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E07-12g": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E08-04": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E08-09": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E09-08": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E09-09b": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E09-09c": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E09-11": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E10-02": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E10-06": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E11-03": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E11-10a": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E11-32b": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E11-33c": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E06-10b": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E06-12": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E06-13": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E06-19": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E06-20": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E07-04c": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E07-12c": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E07-13d": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E09-12": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E11-04": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E08-11": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "QA-1"
+  },
+  "E07-04e": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E06-05": {
+    "Iteration": "Sprint 6",
+    "Phụ trách (giả định)": "QA-1"
+  },
+  "E07-05a": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E07-06a": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E07-06c": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E07-12e": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E07-12f": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E08-10": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E09-14": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E10-05": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E11-06c": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E11-10b": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E11-11": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E11-21": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E11-33d": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E00-16": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E05-01a": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E06-10c": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E07-05b": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E07-06b": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E07-06d": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E07-09b": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E07-13e": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E09-15": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "QA-1"
+  },
+  "E10-09a": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E10-09b": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E10-09c": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E10-10": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "QA-1"
+  },
+  "E11-06d": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E11-07": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E11-22": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E11-34": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "QA-1"
+  },
+  "E02-09": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "QA-1"
+  },
+  "E04-09": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "QA-1"
+  },
+  "E09-16": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "QA-1"
+  },
+  "E05-01b": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E05-01d": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E06-14": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "QA-1"
+  },
+  "E07-05c": {
+    "Iteration": "Sprint 7",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E05-02": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E05-03": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E05-08b": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E07-07a": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E07-08": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E07-09c": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E11-15a": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E11-27": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "QA-1"
+  },
+  "E03-11": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "QA-1"
+  },
+  "E11-17": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "TL"
+  },
+  "E05-01c": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E05-08c": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E05-09": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E07-07b": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E07-10": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E07-11": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E07-13c": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E11-15b": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E11-15c": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E05-10": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "QA-1"
+  },
+  "E07-13a": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E07-13b": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E07-14a": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "QA-1"
+  },
+  "E07-14b": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "QA-1"
+  },
+  "E11-08": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "QA-1"
+  },
+  "E05-11": {
+    "Iteration": "Sprint 8",
+    "Phụ trách (giả định)": "QA-1"
+  },
+  "E07-14c": {
+    "Iteration": "Sprint 9",
+    "Phụ trách (giả định)": "QA-1"
+  },
+  "E00": {
+    "Phụ trách (giả định)": "TL"
+  },
+  "E00-02": {
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E00-03": {
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E00-04": {
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E00-05": {
+    "Phụ trách (giả định)": "TL"
+  },
+  "E00-12": {
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E00-13": {
+    "Phụ trách (giả định)": "TL"
+  },
+  "E01": {
+    "Phụ trách (giả định)": "TL"
+  },
+  "E01-01": {
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E01-07": {
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E02": {
+    "Phụ trách (giả định)": "TL"
+  },
+  "E02-02": {
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E02-03": {
+    "Phụ trách (giả định)": "TL"
+  },
+  "E02-04": {
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E02-07": {
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E02-08": {
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E03": {
+    "Phụ trách (giả định)": "TL"
+  },
+  "E03-10": {
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E04": {
+    "Phụ trách (giả định)": "TL"
+  },
+  "E04-03": {
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E04-12": {
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E04-14": {
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E05": {
+    "Phụ trách (giả định)": "TL"
+  },
+  "E05-01": {
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E05-08": {
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E06": {
+    "Phụ trách (giả định)": "TL"
+  },
+  "E06-01": {
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E06-10": {
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E07": {
+    "Phụ trách (giả định)": "TL"
+  },
+  "E07-04": {
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E07-05": {
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E07-06": {
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E07-07": {
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E07-09": {
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E07-12": {
+    "Phụ trách (giả định)": "BE-2"
+  },
+  "E07-13": {
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E07-14": {
+    "Phụ trách (giả định)": "QA-1"
+  },
+  "E08": {
+    "Phụ trách (giả định)": "TL"
+  },
+  "E09": {
+    "Phụ trách (giả định)": "TL"
+  },
+  "E09-03": {
+    "Phụ trách (giả định)": "BE-1"
+  },
+  "E09-04": {
+    "Phụ trách (giả định)": "FE-2"
+  },
+  "E09-09": {
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E09-10": {
+    "Phụ trách (giả định)": "TL"
+  },
+  "E10": {
+    "Phụ trách (giả định)": "TL"
+  },
+  "E10-09": {
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E11": {
+    "Phụ trách (giả định)": "TL"
+  },
+  "E11-06": {
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E11-10": {
+    "Phụ trách (giả định)": "TL"
+  },
+  "E11-15": {
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E11-32": {
+    "Phụ trách (giả định)": "FE-1"
+  },
+  "E11-33": {
+    "Phụ trách (giả định)": "BE-2"
+  }
+}

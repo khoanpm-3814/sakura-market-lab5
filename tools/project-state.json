@@ -1,0 +1,110 @@
+{
+  "project_id": "PVT_kwHOEo1LTM4Bq9SB",
+  "number": 1,
+  "url": "https://github.com/users/khoanpm-3814/projects/1",
+  "fields": {
+    "Title": {
+      "id": "PVTF_lAHOEo1LTM4Bq9SBzhpSEbI",
+      "type": "TITLE"
+    },
+    "Assignees": {
+      "id": "PVTF_lAHOEo1LTM4Bq9SBzhpSEbU",
+      "type": "ASSIGNEES"
+    },
+    "Status": {
+      "id": "PVTSSF_lAHOEo1LTM4Bq9SBzhpSEbg",
+      "type": "SINGLE_SELECT",
+      "options": {
+        "Todo": "59550cd8",
+        "In Progress": "5e5abb88",
+        "In Review": "138c6f8c",
+        "Done": "7920b010"
+      }
+    },
+    "Labels": {
+      "id": "PVTF_lAHOEo1LTM4Bq9SBzhpSEbs",
+      "type": "LABELS"
+    },
+    "Linked pull requests": {
+      "id": "PVTF_lAHOEo1LTM4Bq9SBzhpSEb8",
+      "type": "LINKED_PULL_REQUESTS"
+    },
+    "Milestone": {
+      "id": "PVTF_lAHOEo1LTM4Bq9SBzhpSEcI",
+      "type": "MILESTONE"
+    },
+    "Repository": {
+      "id": "PVTF_lAHOEo1LTM4Bq9SBzhpSEcU",
+      "type": "REPOSITORY"
+    },
+    "Reviewers": {
+      "id": "PVTF_lAHOEo1LTM4Bq9SBzhpSEcw",
+      "type": "REVIEWERS"
+    },
+    "Parent issue": {
+      "id": "PVTF_lAHOEo1LTM4Bq9SBzhpSEdA",
+      "type": "PARENT_ISSUE"
+    },
+    "Sub-issues progress": {
+      "id": "PVTF_lAHOEo1LTM4Bq9SBzhpSEdQ",
+      "type": "SUB_ISSUES_PROGRESS"
+    },
+    "Created": {
+      "id": "PVTF_lAHOEo1LTM4Bq9SBzhpSEdg",
+      "type": "CREATED"
+    },
+    "Updated": {
+      "id": "PVTF_lAHOEo1LTM4Bq9SBzhpSEdw",
+      "type": "UPDATED"
+    },
+    "Closed": {
+      "id": "PVTF_lAHOEo1LTM4Bq9SBzhpSEeA",
+      "type": "CLOSED"
+    },
+    "SWP": {
+      "id": "PVTF_lAHOEo1LTM4Bq9SBzhpSEfo",
+      "type": "NUMBER"
+    },
+    "Giờ ước lượng": {
+      "id": "PVTF_lAHOEo1LTM4Bq9SBzhpSEfs",
+      "type": "NUMBER"
+    },
+    "Phụ trách (giả định)": {
+      "id": "PVTSSF_lAHOEo1LTM4Bq9SBzhpSEhY",
+      "type": "SINGLE_SELECT",
+      "options": {
+        "TL": "4cd3927c",
+        "BE-1": "fbd6aa74",
+        "BE-2": "b8e2de30",
+        "FE-1": "d9167f44",
+        "FE-2": "9a72472a",
+        "QA-1": "c51f9847"
+      }
+    },
+    "Loại": {
+      "id": "PVTSSF_lAHOEo1LTM4Bq9SBzhpSElQ",
+      "type": "SINGLE_SELECT",
+      "options": {
+        "Epic": "c70b4727",
+        "Issue": "cdb3190e",
+        "Sub-issue": "4f653bc2"
+      }
+    },
+    "Iteration": {
+      "id": "PVTIF_lAHOEo1LTM4Bq9SBzhpSElg",
+      "type": "ITERATION",
+      "iterations": {
+        "Sprint 1": "11a344f0",
+        "Sprint 2": "d2bef68e",
+        "Sprint 3": "1157a688",
+        "Sprint 4": "c9567c50",
+        "Sprint 5": "9286c6c5",
+        "Sprint 6": "ba2e61ed",
+        "Sprint 7": "ffbcb3a2",
+        "Sprint 8": "550a68c7",
+        "Sprint 9": "80342d51",
+        "Sprint 10": "bb464b3b"
+      }
+    }
+  }
+}

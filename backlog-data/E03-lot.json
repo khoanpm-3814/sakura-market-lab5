@@ -1,0 +1,282 @@
+{
+  "epic": "E03",
+  "title": "Lô hàng",
+  "f_ids": ["F-007", "F-008", "F-009", "F-010"],
+  "summary": "Tiếp nhận lô (chặn 卸売業者 không hợp lệ, mã L theo ngày, replay offline dùng chung đường code), ghi 目利き / 下見 do người đánh giá, 公開 chỉ sau 下見, số lượng còn lại không âm và lịch sử số lượng, sửa thuộc tính có lý do. Hàng đợi offline của SCR-009 thuộc E11.",
+  "constraint": null,
+  "issues": [
+    {
+      "key": "E03-01",
+      "title": "Viết hàm sett_refresh_lot_status tính lại trạng thái lô",
+      "discipline": "DB",
+      "description": "Hàm nội bộ được cancel_trade, record_delivery, reverse_delivery, record_delivery_exception, decide_correction, adjust_lot gọi: suy trạng thái lô từ remaining_qty và trạng thái giao hàng các giao dịch (公開 ↔ 確定 ↔ 引渡し完了) theo state-machines §1; giả định lô đã được khóa FOR UPDATE bởi hàm gọi.",
+      "acceptance": [
+        "remaining_qty về > 0 từ 確定 → 公開",
+        "remaining_qty = 0 và mọi giao dịch không 取消 đều 完了 → 引渡し完了; còn 1 giao dịch 引渡し中 → giữ 確定",
+        "引渡し完了 khi có lần giao bị hủy → về 確定",
+        "pgTAP phủ mọi cạnh chuyển trạng thái"
+      ],
+      "spec_refs": ["F-009", "F-016", "FN-lot-sett_refresh_lot_status", "STATE-MACHINES", "TBL-lots"],
+      "hours": 4,
+      "hours_basis": "1 hàm thuần trạng thái, 4–5 cạnh chuyển.",
+      "priority": "must",
+      "depends_on": ["E00-02d"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E03-02",
+      "title": "Viết create_lot + LOT-02 tiếp nhận lô (online và replay)",
+      "discipline": "BE",
+      "description": "Hàm create_lot: idempotency qua sync_apply_operation trước mọi kiểm tra, biz_date = ngày JST của X-Occurred-At, ensure_business_day_open, bên bán phải là 卸売業者 hợp lệ 市場登録 tại biz_date (M_LOT_01 qua participant_eligibility_reason), chặn trùng seller_id + biz_date + seller_lot_ref (M_LOT_02 kèm lot_no cũ), insert lots 受付 với mã L-YYYYMMDD-NNNNN, audit lot.receive. Route bắt buộc Idempotency-Key, X-Occurred-At, X-Device-Id; kiểm đơn vị (kg 1 chữ số thập phân, đơn vị đếm số nguyên); nhận file ref 受入票 tùy chọn.",
+      "acceptance": [
+        "Test viewpoint No.1〜7, 14 của DD-F007 đạt",
+        "Thiếu unit → 400 M_01; 2.5 ケース → 400 M_LOT_06; 12.35 kg → 400 M_07",
+        "Gửi lại cùng key cùng payload → 1 lô duy nhất, header Idempotent-Replayed",
+        "ROLE-002〜012 gọi → 403",
+        "pgTAP + Vitest"
+      ],
+      "spec_refs": ["F-007", "LOT-02", "FN-lot-create_lot", "FN-sync-sync_apply_operation", "FN-common-next_business_no", "FN-common-ensure_business_day_open", "FN-eligibility-eligibility_is_valid_on", "DD-F007-lot-intake-inspection-publish", "TBL-lots", "TBL-sync_operations"],
+      "hours": 12,
+      "hours_basis": "5 quy tắc nghiệp vụ theo thứ tự + idempotency + 3 header bắt buộc + kiểm đơn vị.",
+      "priority": "must",
+      "depends_on": ["E02-01", "E00-10", "E00-03a", "E00-07", "E00-08", "E00-04b"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E03-03",
+      "title": "Viết LOT-03 dữ liệu tra cứu cho màn tiếp nhận lô",
+      "discipline": "BE",
+      "description": "Trả danh sách 卸売業者 + trạng thái 市場登録 hôm nay, đơn vị, 業務日 + trạng thái ngày; dữ liệu đủ nhỏ để service worker cache cho nhập offline (M_LOT_07).",
+      "acceptance": [
+        "卸売業者 tạm ngưng hiển thị trạng thái và căn cứ đúng",
+        "ROLE-001, ROLE-005 gọi được; vai trò khác 403",
+        "Vitest"
+      ],
+      "spec_refs": ["F-007", "LOT-03", "FN-eligibility-eligibility_is_valid_on", "FN-common-getBusinessDay"],
+      "hours": 4,
+      "hours_basis": "1 API đọc tập nhỏ, không phân trang.",
+      "priority": "must",
+      "depends_on": ["E02-01", "E00-07", "E00-10"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E03-04",
+      "title": "Dựng màn SCR-009 tiếp nhận lô (tablet, chế độ online)",
+      "discipline": "FE",
+      "description": "Form chọn 卸売業者 (nút lớn), 品目区分, 品目, 産地, số lượng + đơn vị (bàn phím số), 出荷者伝票番号; sinh Idempotency-Key / X-Occurred-At mỗi lần 登録; sau 201 hiện mã lô và cho tải 受入票 (lỗi tải không rollback lô, M_LOT_18). Vùng chạm ≥ 56 px đeo găng. Phần xếp hàng offline / badge 送信待ち do E11 gắn vào.",
+      "acceptance": [
+        "Đủ ô, thông báo, trạng thái theo SCR-009",
+        "Validate đơn vị khi rời ô cùng message ID với server",
+        "Bấm 登録 nhanh 2 lần chỉ tạo 1 lô",
+        "Kiểm axe AA, vùng chạm ≥ 56 px",
+        "Test component"
+      ],
+      "spec_refs": ["SCR-009", "LOT-02", "LOT-03", "ATT-01", "ATT-02", "COMMON-SPEC"],
+      "hours": 12,
+      "hours_basis": "Màn tablet nhập liên tục, nhiều ô, quy tắc đơn vị, bước tải tệp sau khi lưu.",
+      "priority": "must",
+      "depends_on": ["E03-02", "E03-03", "E00-12a", "E00-12b", "E00-04d"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E03-05",
+      "title": "Viết record_lot_inspection + LOT-06 ghi 目利き / 下見",
+      "discipline": "BE",
+      "description": "Hàm: ensure_business_day_open(lots.biz_date) → lots FOR UPDATE → insert lot_inspections append-only (sửa = dòng mới trỏ supersedes_id, bắt buộc correction_reason) → dòng đầu tiên chuyển lô 受付 → 下見済 → audit lot.inspection / lot.inspection.correct (trước / sau). Chỉ nhận giá trị người nhập, không tự đánh giá. Ảnh tùy chọn gắn theo chế độ B.",
+      "acceptance": [
+        "Thẩm định đầu trên lô 受付 → 下見済, M_LOT_10",
+        "supersedes_id đã bị dòng khác thay → 409; sửa thiếu correction_reason → 400",
+        "Ngày của lô 締め済 → 422 M_COM_09",
+        "Chỉ ROLE-002",
+        "pgTAP + Vitest"
+      ],
+      "spec_refs": ["F-008", "LOT-06", "FN-lot-record_lot_inspection", "DD-F007-lot-intake-inspection-publish", "TBL-lot_inspections", "TBL-lots"],
+      "hours": 8,
+      "hours_basis": "Append-only có thay thế + chuyển trạng thái lô + audit nhạy cảm.",
+      "priority": "must",
+      "depends_on": ["E00-02d", "E00-10", "E00-03a", "E00-07", "E00-08"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E03-06",
+      "title": "Viết publish_lot + LOT-04 公開 lô",
+      "discipline": "BE",
+      "description": "Hàm: ensure_business_day_open → lots FOR UPDATE → chỉ từ 下見済 (受付 → M_LOT_09, trạng thái khác / updated_at lệch → CONFLICT) → 公開 + published_by / published_at → audit lot.publish. Route chỉ ROLE-002 theo API-LIST bản 2026-11-10.",
+      "acceptance": [
+        "LOT-04 khi 受付 → 422 M_LOT_09",
+        "Đã 公開 / updated_at lệch → 409 M_COM_17",
+        "ROLE-001 / ROLE-003 gọi → 403",
+        "pgTAP + Vitest"
+      ],
+      "spec_refs": ["F-007", "F-008", "LOT-04", "FN-lot-publish_lot", "DD-F007-lot-intake-inspection-publish", "PREMISE"],
+      "hours": 4,
+      "hours_basis": "1 chuyển trạng thái có điều kiện, 3 nhánh lỗi.",
+      "priority": "must",
+      "depends_on": ["E03-05"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E03-07",
+      "title": "Viết adjust_lot + LOT-07 sửa thuộc tính / số lượng ban đầu",
+      "discipline": "BE",
+      "description": "Hàm: ensure_business_day_open → lots FOR UPDATE; 「đã có giao dịch」 = có trades status ≠ 取消 (kể cả 下書き); ROLE-001 sửa khi đã có giao dịch → M_LOT_12; đổi unit / seller_id khi đã có giao dịch → M_LOT_13; initial_qty mới làm remaining âm → M_LOT_14 (kèm số đã bán); insert lot_adjustments (属性 / 数量, before / after, delta_initial_qty, lý do), cập nhật lots, gọi sett_refresh_lot_status, audit lot.adjust.",
+      "acceptance": [
+        "Test viewpoint No.11〜13 của DD-F007 đạt",
+        "Không có trường nào đổi → 400 M_LOT_17; trùng seller_lot_ref → 422 M_LOT_02",
+        "updated_at lệch → 409",
+        "Bất biến remaining_qty = initial_qty − Σ qty hiệu lực giữ đúng sau mỗi lần sửa",
+        "pgTAP + Vitest"
+      ],
+      "spec_refs": ["F-010", "F-009", "LOT-07", "FN-lot-adjust_lot", "FN-lot-sett_refresh_lot_status", "TBL-lot_adjustments", "TBL-lots", "DD-F007-lot-intake-inspection-publish"],
+      "hours": 12,
+      "hours_basis": "Quyền khác nhau theo vai trò × trạng thái giao dịch, 6 nhánh lỗi, tính lại số lượng và trạng thái lô.",
+      "priority": "must",
+      "depends_on": ["E03-01", "E00-02d", "E00-03a", "E00-10"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E03-08",
+      "title": "Viết LOT-01 danh sách lô, LOT-05 chi tiết lô và view lịch sử số lượng",
+      "discipline": "BE",
+      "description": "LOT-01 lọc 業務日 / trạng thái, phân trang, kèm initial / remaining (gồm ROLE-002 để chọn lô 下見待ち, ROLE-004 xem). LOT-05 lô + kết quả thẩm định hiện hành (dòng không bị thay thế) + lịch sử số lượng + lịch sử sửa thuộc tính. Tạo view v_lot_qty_history hợp trades (確定 −qty, 取消 +qty), trade_adjustments (delta_qty), lot_adjustments (delta_initial_qty) theo thời gian.",
+      "acceptance": [
+        "Lịch sử số lượng cộng dồn khớp remaining_qty hiện tại",
+        "Kết quả thẩm định trả dòng mới nhất không bị supersedes_id trỏ tới",
+        "Vai trò theo API-LIST (ROLE-001〜005)",
+        "p95 ≤ 2 giây với dữ liệu năm 3",
+        "pgTAP cho view + Vitest"
+      ],
+      "spec_refs": ["F-009", "F-008", "F-010", "LOT-01", "LOT-05", "DD-F007-lot-intake-inspection-publish", "TBL-lots", "TBL-lot_inspections", "TBL-lot_adjustments", "TBL-trade_adjustments"],
+      "hours": 8,
+      "hours_basis": "2 API đọc + 1 view hợp 3 nguồn cần thiết kế lại vì chưa có định nghĩa trong FN.",
+      "priority": "must",
+      "depends_on": ["E00-02d", "E00-07"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E03-09",
+      "title": "Dựng màn SCR-010 danh sách lô",
+      "discipline": "FE",
+      "description": "Bảng lô theo 業務日 / trạng thái (受付, 下見済, 公開, 確定, 引渡し完了, 取消), số lượng ban đầu / còn lại + đơn vị, lọc nhanh 下見待ち cho ROLE-002, link SCR-011; dùng được trên PC và tablet.",
+      "acceptance": [
+        "Đủ cột / lọc theo SCR-010",
+        "ROLE-002 mở thẳng bộ lọc 下見待ち",
+        "Test component"
+      ],
+      "spec_refs": ["SCR-010", "LOT-01"],
+      "hours": 8,
+      "hours_basis": "Màn danh sách PC + tablet với bộ lọc theo vai trò.",
+      "priority": "must",
+      "depends_on": ["E03-08", "E00-12c"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E03-10",
+      "title": "Dựng màn SCR-011 chi tiết lô (thẩm định, số lượng còn lại, sửa thuộc tính)",
+      "discipline": "FE",
+      "description": "Màn chi tiết dùng chung cho ROLE-001 / 002 / 003 / 004 / 005 với khối hiển thị khác nhau theo vai trò.",
+      "acceptance": [
+        "Mỗi vai trò chỉ thấy thao tác được phép theo SCR-011"
+      ],
+      "spec_refs": ["SCR-011", "F-008", "F-009", "F-010"],
+      "hours": null,
+      "hours_basis": "Issue cha — giờ ở sub-issue.",
+      "priority": "must",
+      "depends_on": ["E03-08"],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E03-10a",
+          "title": "Dựng phần xem SCR-011: thông tin lô, lịch sử số lượng, lịch sử sửa",
+          "discipline": "FE",
+          "description": "Khối thông tin lô + trạng thái, khối số lượng ban đầu / còn lại, bảng lịch sử số lượng (giao dịch, giao hàng, điều chỉnh), bảng lịch sử sửa thuộc tính trước / sau, danh sách tệp đính kèm.",
+          "acceptance": [
+            "Số liệu hiển thị khớp LOT-05",
+            "Test component"
+          ],
+          "spec_refs": ["SCR-011", "LOT-05"],
+          "hours": 8,
+          "hours_basis": "4 khối hiển thị, không ghi.",
+          "priority": "must",
+          "depends_on": ["E03-08", "E00-12a"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E03-10b",
+          "title": "Dựng form ghi / sửa kết quả 目利き / 下見 và nút 公開 trên SCR-011",
+          "discipline": "FE",
+          "description": "Form ROLE-002: loại (目利き / 下見), 等級, kết quả, người đánh giá, thời điểm, ảnh tùy chọn; chế độ sửa yêu cầu lý do và xác nhận M_LOT_11 khi lô đã có giao dịch; nút 公開 chỉ hiện ở 下見済.",
+          "acceptance": [
+            "Banner nêu hệ thống không tự đánh giá",
+            "Nút 公開 ẩn khi lô 受付",
+            "Test component"
+          ],
+          "spec_refs": ["SCR-011", "LOT-06", "LOT-04"],
+          "hours": 8,
+          "hours_basis": "1 form 2 chế độ + tải ảnh + nút chuyển trạng thái.",
+          "priority": "must",
+          "depends_on": ["E03-10a", "E03-05", "E03-06", "E00-04d"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E03-10c",
+          "title": "Dựng form sửa thuộc tính / số lượng ban đầu trên SCR-011",
+          "discipline": "FE",
+          "description": "Form ROLE-001 (trước khi có giao dịch) / ROLE-005: chỉ bật ô được phép (unit / seller khóa khi đã có giao dịch), lý do bắt buộc, xác nhận M_LOT_15, hiển thị lỗi M_LOT_12〜14 kèm số đã bán.",
+          "acceptance": [
+            "ROLE-001 thấy form khóa khi lô đã có giao dịch",
+            "Lỗi 409 → tải lại (CS-17)",
+            "Test component"
+          ],
+          "spec_refs": ["SCR-011", "LOT-07"],
+          "hours": 8,
+          "hours_basis": "Form có quy tắc bật / khóa ô theo vai trò × trạng thái.",
+          "priority": "must",
+          "depends_on": ["E03-10a", "E03-07"],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E03-11",
+      "title": "Xây bộ test vector bất biến số lượng còn lại của lô (BR-LOT-02)",
+      "discipline": "QA",
+      "description": "Chuỗi thao tác hỗn hợp trên cùng lô: 確定 相対, kết quả せり, 取消, phiếu điều chỉnh tăng / giảm, sửa initial_qty, giao / hủy giao; sau mỗi bước kiểm remaining_qty = initial_qty − Σ qty hiệu lực của giao dịch 確定 / 再確定, không âm, trạng thái lô đúng state-machines §1.",
+      "acceptance": [
+        "≥ 20 kịch bản chuỗi, mỗi kịch bản ghi nguồn (F-009, BR-LOT-02, DD-F007 viewpoint 15)",
+        "Chạy trong CI bằng pgTAP",
+        "Có ít nhất 3 kịch bản song song (2 phiên chốt cùng lô, chốt + sửa lô)"
+      ],
+      "spec_refs": ["F-009", "DD-F007-lot-intake-inspection-publish", "DD-F011-aitai-trade-confirm", "FN-lot-sett_refresh_lot_status", "STATE-MACHINES"],
+      "hours": 8,
+      "hours_basis": "Chuỗi chạm 6 hàm ghi của 3 epic, cần dựng dữ liệu và kiểm sau từng bước.",
+      "priority": "should",
+      "depends_on": ["E03-07", "E04-04", "E04-05", "E04-10", "E06-10", "E00-16"],
+      "constraint": null,
+      "sub_issues": []
+    }
+  ],
+  "spec_not_issued": [
+    {"spec": "Hàng đợi offline cho SCR-009, SYNC-01 / SYNC-02, sync_apply_operation / sync_record_rejection / sync_resolve", "reason": "F-033 → E11; E03-02 dùng chung đường code online / replay và gọi sync_apply_operation."},
+    {"spec": "In tag lô / mã vạch, danh mục 品目区分 / 等級 chuẩn", "reason": "Không có trong 37 F; chờ OQ-16 (nếu cần là CR)."},
+    {"spec": "Tải xuống / xem ảnh 受入票, ảnh thẩm định (ATT-03)", "reason": "F-035 → E11."}
+  ],
+  "spec_gaps": [
+    {"spec": "DD-F007 §3.1 vs API-LIST LOT-04 (bản 2026-11-10) và PREMISE A-08", "gap": "DD ghi guard LOT-04 là ROLE-001 / ROLE-003 và 「chờ PL chốt」; API-LIST đã chốt chỉ ROLE-002, 下見済 → 公開.", "proposal": "sửa thiết kế", "note": "Làm theo API-LIST; sửa DD-F007 §3.1 và §5.4 (LOT-01 đã có ROLE-002)."},
+    {"spec": "DD-F007 §1.1 / DD-F016 §2.1 vs FN-lot-create_lot §50 / FN-delivery-record_delivery §51", "gap": "DD nói route gọi sync_apply_operation và hàm này bọc create_lot / record_delivery; FN nói create_lot / record_delivery gọi sync_apply_operation ở bước đầu. Hai chiều gọi ngược nhau.", "proposal": "sửa thiết kế", "note": "Đề xuất theo FN (hàm nghiệp vụ gọi sync_apply_operation, route chỉ gọi 1 rpc); sửa DD. Cần thống nhất với E11."},
+    {"spec": "DD-F007 §5.2 / LOT-05 / TBL-lot_adjustments", "gap": "View v_lot_qty_history được nói là 「định nghĩa ở function spec」 nhưng không FN nào định nghĩa.", "proposal": "sửa thiết kế", "note": "E03-08 tự định nghĩa view; bổ sung vào DB design (view) sau khi làm."},
+    {"spec": "OQ-08 / PREMISE A-08", "gap": "Bắt buộc 下見 trước 公開 vẫn là giả định chờ khách; nếu khách cần bán không qua 下見 phải thêm đường 公開 trực tiếp có lý do.", "proposal": "để mở", "note": "Không chặn sprint; giữ thiết kế hiện tại."}
+  ]
+}

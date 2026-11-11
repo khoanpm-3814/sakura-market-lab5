@@ -1,0 +1,204 @@
+{
+  "epic": "E08",
+  "title": "Thông báo",
+  "f_ids": ["F-026", "F-027"],
+  "summary": "Outbox thông báo trong DB (ghi cùng transaction nghiệp vụ), job gửi email có gửi lại ≤ 3 lần và hạn 5 phút cho Critical, hộp thư in-app, cấu hình thông báo theo sự kiện và log gửi cho ROLE-009.",
+  "issues": [
+    {
+      "key": "E08-01",
+      "title": "Viết notify_event ghi outbox thông báo trong transaction nghiệp vụ",
+      "discipline": "BE",
+      "description": "Hàm dùng chung cho mọi hàm DB phát sự kiện: đọc cấu hình không khóa, bỏ qua khi tắt; tính due_at (Critical = now + 5 phút, Normal theo send_time JST kế tiếp); insert notifications + setting_snapshot; xác định người nhận theo vai trò đang giữ và theo người tham gia (ROLE-012); tạo notification_dispatches mỗi người × kênh (in-app 送信済 ngay, email 送信待ち). Toàn thân trong khối exception để lỗi thông báo không làm hỏng nghiệp vụ.",
+      "acceptance": [
+        "Lỗi bên trong (vd event_type sai) chỉ raise warning, transaction gọi vẫn commit",
+        "Sự kiện eligibility_* luôn trỏ entity participants",
+        "Tập người nhận rỗng vẫn giữ dòng notifications",
+        "Normal có send_time 07:00 phát lúc 08:00 JST → due_at 07:00 ngày hôm sau",
+        "Không ghi audit, không khóa dòng nghiệp vụ"
+      ],
+      "spec_refs": ["FN-notification-notify_event", "TBL-notifications", "TBL-notification_dispatches", "TBL-notification_settings", "ADR-009", "DD-F026-notification-dispatch"],
+      "hours": 8,
+      "hours_basis": "3 cách tính due_at, 2 nguồn người nhận, 2 kênh và khối bắt lỗi subtransaction; được nhiều epic gọi nên cần test kỹ.",
+      "priority": "must",
+      "depends_on": ["E00-02"],
+      "sub_issues": []
+    },
+    {
+      "key": "E08-02",
+      "title": "Nạp danh mục sự kiện và cấu hình thông báo mặc định",
+      "discipline": "DB",
+      "description": "Seed notification_settings cho mọi event_type trong CHECK (severity, vai trò nhận, kênh, send_time, ngưỡng) và bổ sung event_type còn thiếu mà hàm đã dùng (business_day_unlocked của unlock_business_day, sự kiện xung đột đồng bộ của F-033) sau khi PL chốt.",
+      "acceptance": [
+        "Mọi event_type mà các FN gọi notify_event đều có dòng cấu hình",
+        "Seed idempotent, chạy lại không ghi đè cấu hình ROLE-009 đã sửa"
+      ],
+      "spec_refs": ["TBL-notification_settings", "FN-closing-unlock_business_day", "DD-F033-offline-sync-replay"],
+      "hours": 4,
+      "hours_basis": "Script seed ~17 dòng + migration sửa CHECK.",
+      "priority": "must",
+      "depends_on": ["E00-02"],
+      "sub_issues": []
+    },
+    {
+      "key": "E08-03",
+      "title": "Viết job notification_dispatch claim lượt email mỗi phút",
+      "discipline": "BE",
+      "description": "Trong khung job pg_cron: ghi job_runs 実行中; claim ≤ 200 lượt email 送信待ち / 再送待ち đến hạn (Critical trước) bằng FOR UPDATE SKIP LOCKED, tăng attempt_count, đặt lease next_attempt_at = now + 5 phút; gọi JOB-01 qua pg_net với Bearer CRON_SECRET từ Vault; lỗi → job_runs 失敗 + notify job_failed.",
+      "acceptance": [
+        "Không có lượt → 成功, processed_count 0, không gọi pg_net",
+        "Endpoint chết → lượt được claim lại sau 5 phút và tính 1 lần thử",
+        "Hai lượt job chồng nhau không claim trùng (SKIP LOCKED)"
+      ],
+      "spec_refs": ["FN-notification-notification_dispatch", "TBL-notification_dispatches", "TBL-job_runs", "JOB-01", "ADR-009"],
+      "hours": 8,
+      "hours_basis": "Claim có lease + ưu tiên + gọi pg_net + nhánh lỗi job.",
+      "priority": "must",
+      "depends_on": ["E08-01", "E00-05"],
+      "sub_issues": []
+    },
+    {
+      "key": "E08-04",
+      "title": "Dựng endpoint JOB-01 gửi email qua dịch vụ email giao dịch",
+      "discipline": "BE",
+      "description": "Route nội bộ /api/internal/jobs/notification-dispatch: kiểm Bearer CRON_SECRET, gửi từng item qua adapter SMTP API (tách khỏi Supabase Auth, A-04), gọi rpc notification_dispatch_record_result cho từng lượt; giới hạn thời gian chạy, không log địa chỉ email đầy đủ.",
+      "acceptance": [
+        "Thiếu / sai secret → 401, không gửi",
+        "Adapter có bản giả cho unit test; lỗi 1 item không dừng các item khác",
+        "Log chỉ ghi dispatch_id và kết quả"
+      ],
+      "spec_refs": ["JOB-01", "FN-notification-notification_dispatch_record_result", "DD-F026-notification-dispatch"],
+      "hours": 8,
+      "hours_basis": "Route + adapter nhà cung cấp email + xử lý lỗi từng item và giới hạn thời gian.",
+      "priority": "must",
+      "depends_on": ["E08-05", "E00-01"],
+      "sub_issues": []
+    },
+    {
+      "key": "E08-05",
+      "title": "Viết notification_dispatch_record_result ghi kết quả và lịch gửi lại",
+      "discipline": "BE",
+      "description": "Callback từng lượt: idempotent khi đã 送信済 / 失敗; thành công → 送信済 + provider_message_id; lỗi → 再送待ち với chờ 1 / 2 / 4 phút, lần thứ 4 lỗi → 失敗 + audit notification.dispatch_failed để ops_watchdog cảnh báo.",
+      "acceptance": [
+        "Lỗi 3 lần liên tiếp đặt next_attempt_at đúng 1 / 2 / 4 phút",
+        "Lần 4 lỗi → 失敗, có dòng audit",
+        "Callback trùng sau lease không đổi trạng thái"
+      ],
+      "spec_refs": ["FN-notification-notification_dispatch_record_result", "TBL-notification_dispatches", "FN-audit-audit_append"],
+      "hours": 4,
+      "hours_basis": "1 hàm 3 nhánh trạng thái + backoff.",
+      "priority": "must",
+      "depends_on": ["E08-01", "E00-03"],
+      "sub_issues": []
+    },
+    {
+      "key": "E08-06",
+      "title": "Dựng API hộp thư in-app NTF-01 / NTF-02 / NTF-03",
+      "discipline": "BE",
+      "description": "NTF-01 trả thông báo của chính người dùng (lọc chưa đọc / Critical, mới nhất trước, phân trang) và số chưa đọc; NTF-02 đánh dấu đã đọc 1 thông báo của mình; NTF-03 đọc hết. ROLE-012 chỉ thấy thông báo của participant gắn tài khoản (QA-001).",
+      "acceptance": [
+        "Đánh dấu thông báo của người khác → 404",
+        "Số chưa đọc giảm đúng sau NTF-02 / NTF-03"
+      ],
+      "spec_refs": ["NTF-01", "NTF-02", "NTF-03", "TBL-notification_dispatches"],
+      "hours": 4,
+      "hours_basis": "3 API nhỏ trên 1 bảng, lọc theo phiên.",
+      "priority": "must",
+      "depends_on": ["E08-01", "E00-01"],
+      "sub_issues": []
+    },
+    {
+      "key": "E08-07",
+      "title": "Dựng màn SCR-003 通知一覧 và chuông thông báo ở header",
+      "discipline": "FE",
+      "description": "Danh sách thông báo có lọc chưa đọc / Critical, mở link theo entity / entity_id, đọc / đọc hết; badge số chưa đọc ở header chung (làm mới định kỳ).",
+      "acceptance": [
+        "Bấm thông báo eligibility_* mở SCR-006 của người tham gia",
+        "Badge cập nhật sau khi đọc",
+        "Dùng được trên PC và tablet"
+      ],
+      "spec_refs": ["SCR-003", "NTF-01", "NTF-02", "NTF-03"],
+      "hours": 8,
+      "hours_basis": "Màn danh sách + điều hướng theo loại entity + badge header.",
+      "priority": "must",
+      "depends_on": ["E08-06"],
+      "sub_issues": []
+    },
+    {
+      "key": "E08-08",
+      "title": "Viết notification_setting_update và API NTF-04 / NTF-05",
+      "discipline": "BE",
+      "description": "NTF-04 trả cấu hình mọi sự kiện. NTF-05 (ROLE-009) cập nhật 1 sự kiện: FOR UPDATE, so updated_at, kiểm mã vai trò tồn tại, ngưỡng / giờ gửi / kênh hợp lệ; lưu trước / sau trong audit 運用; không ảnh hưởng thông báo đã phát (snapshot).",
+      "acceptance": [
+        "Mã vai trò không tồn tại → 400 / 422",
+        "updated_at lệch → 409",
+        "Thông báo phát trước khi đổi vẫn giữ setting_snapshot cũ"
+      ],
+      "spec_refs": ["FN-notification-notification_setting_update", "NTF-04", "NTF-05", "TBL-notification_settings"],
+      "hours": 8,
+      "hours_basis": "1 hàm ghi có optimistic lock + 4 nhóm kiểm + 2 route.",
+      "priority": "must",
+      "depends_on": ["E08-02", "E00-03"],
+      "sub_issues": []
+    },
+    {
+      "key": "E08-09",
+      "title": "Dựng API log gửi thông báo NTF-06",
+      "discipline": "BE",
+      "description": "ROLE-009 tra lượt gửi in-app / email: thời điểm, người nhận, kênh, kết quả, số lần thử, lỗi cuối; lọc theo sự kiện / trạng thái / khoảng ngày.",
+      "acceptance": [
+        "Lọc trạng thái 失敗 trả đúng lượt",
+        "Vai trò khác ROLE-009 → 403"
+      ],
+      "spec_refs": ["NTF-06", "TBL-notification_dispatches", "TBL-notifications"],
+      "hours": 4,
+      "hours_basis": "API đọc join 2 bảng có lọc / phân trang.",
+      "priority": "must",
+      "depends_on": ["E08-05"],
+      "sub_issues": []
+    },
+    {
+      "key": "E08-10",
+      "title": "Dựng màn SCR-036 通知設定",
+      "discipline": "FE",
+      "description": "Bảng sự kiện baseline; form sửa người nhận (vai trò), ngưỡng, giờ gửi, kênh, bật / tắt; tab log gửi (NTF-06) có lọc.",
+      "acceptance": [
+        "Lưu thành công hiển thị giá trị mới, 409 thì tải lại",
+        "Log gửi hiển thị số lần thử và lỗi cuối"
+      ],
+      "spec_refs": ["SCR-036", "NTF-04", "NTF-05", "NTF-06"],
+      "hours": 12,
+      "hours_basis": "Form cấu hình nhiều kiểu trường × ~17 sự kiện + tab log có lọc.",
+      "priority": "must",
+      "depends_on": ["E08-08", "E08-09"],
+      "sub_issues": []
+    },
+    {
+      "key": "E08-11",
+      "title": "Viết test kịch bản gửi Critical ≤ 5 phút và gửi lại",
+      "discipline": "QA",
+      "description": "Kịch bản tích hợp DB + adapter giả: Critical gửi ở lượt job đầu; adapter lỗi 3 lần rồi thành công; lỗi 4 lần → 失敗 và cảnh báo; endpoint không trả lời → lease claim lại; sự kiện Normal gom theo send_time.",
+      "acceptance": [
+        "Mọi kịch bản pass với đồng hồ giả lập",
+        "Ngân sách thời gian Critical ≤ 5 phút được kiểm bằng mốc due_at"
+      ],
+      "spec_refs": ["DD-F026-notification-dispatch", "FN-notification-notification_dispatch", "FN-notification-notification_dispatch_record_result"],
+      "hours": 8,
+      "hours_basis": "5 kịch bản có thời gian giả lập qua job + callback.",
+      "priority": "should",
+      "depends_on": ["E08-03", "E08-04"],
+      "sub_issues": []
+    }
+  ],
+  "spec_not_issued": [
+    {"spec": "Các job phát sự kiện eligibility_expiry_notice (01:30) và delivery_backlog_notice (09:00)", "reason": "Thuộc F-005 / F-015 → E02 / E05; dùng notify_event của E08-01."},
+    {"spec": "DASH-01 số thông báo chưa đọc trên SCR-002", "reason": "API trang chủ thuộc E02 (F-005) / UI chung E00; E08-06 trả sẵn số chưa đọc để dùng lại — cần xác nhận owner."},
+    {"spec": "Cảnh báo vận hành A-5 (Critical quá hạn / 失敗)", "reason": "Do ops_watchdog sinh → E11."},
+    {"spec": "Kênh SMS / FAX", "reason": "Ngoài phạm vi theo A-04."}
+  ],
+  "spec_gaps": [
+    {"spec": "TBL-notification_settings CHECK ↔ FN-closing-unlock_business_day, DD-F033 §3.4", "gap": "Event business_day_unlocked và sự kiện xung đột đồng bộ được dùng nhưng không có trong CHECK event_type → notify_event bỏ qua âm thầm.", "proposal": "sửa thiết kế", "note": "Thêm vào CHECK + seed (E08-02); cần PL chốt tên và severity."},
+    {"spec": "TBL-notification_settings CHECK ↔ DD-F025 §2.2, FN-rule-rule_version_submit / decide / cancel", "gap": "CHECK đã có rule_version_submitted / rule_version_decided / rule_approval_overdue nhưng DD-F025 và FN quy tắc ghi 'không có event type cho quy tắc' và không gọi notify_event; rule_approval_overdue không có job nào sinh (liên quan OQ-23).", "proposal": "issue làm rõ", "note": "Chọn: bỏ 3 giá trị khỏi CHECK, hoặc thêm lời gọi notify_event vào FN quy tắc (E07-12b/c) + job nhắc quá hạn."},
+    {"spec": "ADR / A-04 dịch vụ email giao dịch", "gap": "Chưa chọn nhà cung cấp SMTP API, domain gửi, SPF / DKIM và nơi lưu khóa API; E08-04 cần để viết adapter thật.", "proposal": "issue làm rõ", "note": "Đề xuất PL chốt trong sprint đầu; adapter viết theo interface để đổi nhà cung cấp không ảnh hưởng hàm DB."},
+    {"spec": "DD-F026 §5.2 ↔ FN list No.84", "gap": "DD ghi notification_setting_update 'dự kiến, chưa có FN spec' trong khi FN đã có (v1.1).", "proposal": "sửa thiết kế", "note": "Chỉ cập nhật câu chữ DD."}
+  ]
+}

@@ -1,0 +1,730 @@
+{
+  "epic": "E02",
+  "title": "Người tham gia & tư cách",
+  "f_ids": [
+    "F-003",
+    "F-004",
+    "F-005",
+    "F-006"
+  ],
+  "summary": "Hồ sơ 4 loại người tham gia không gộp loại, yêu cầu tư cách R05 lập → R06 duyệt, tạm ngưng, kỳ hiệu lực có lịch sử và hàm 「hợp lệ tại ngày D」 dùng bởi E03 / E04 / E05 / E06, job 02:00 失効 + nhắc sắp hết hạn, ROLE-012 tự xem, trang chủ theo vai trò.",
+  "constraint": null,
+  "issues": [
+    {
+      "key": "E02-01",
+      "title": "Viết hàm eligibility_is_valid_on và participant_eligibility_reason",
+      "discipline": "DB",
+      "description": "Hàm thuần: hợp lệ khi có kỳ phủ ngày D và trạng thái tại D (dòng lịch sử mới nhất có effective_date ≤ D) ∈ {有効, 有効(予定)}; không có dòng → không hợp lệ; không phụ thuộc job 02:00. Hàm lý do trả {basis, status, date} đúng căn cứ theo loại để dựng M_TRD_01 / M_LOT_01 / M_DLV_02. Có index hỗ trợ.",
+      "acceptance": [
+        "valid_to = 2027-12-31: hỏi 12-31 true, 2028-01-01 false kể cả khi job chưa chạy",
+        "Tạm ngưng 2027-06-15 nay đã 有効: hỏi 2027-06-15 false",
+        "Kỳ 有効(予定) bắt đầu ngày mai, hỏi ngày mai → true",
+        "Lý do cho 売買参加者 ghi 承認, không bao giờ ghi 許可",
+        "pgTAP cho mọi nhánh; EXPLAIN dùng index"
+      ],
+      "spec_refs": [
+        "F-004",
+        "FN-eligibility-eligibility_is_valid_on",
+        "FN-eligibility-participant_eligibility_reason",
+        "DD-F004-eligibility-request-approval",
+        "ADR-010",
+        "TBL-eligibility_periods",
+        "TBL-eligibility_status_histories"
+      ],
+      "hours": 8,
+      "hours_basis": "Logic trạng thái theo ngày có nhiều biên + chuỗi lý do theo 4 loại; được nhiều epic gọi nên cần test kỹ.",
+      "priority": "must",
+      "depends_on": [
+        "E00-02b"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E02-02",
+      "title": "Hiện thực hồ sơ người tham gia 4 loại (F-003)",
+      "discipline": "BE",
+      "description": "Lập / sửa / xem hồ sơ người tham gia; kind và code bất biến; tư cách không đổi qua đây.",
+      "acceptance": [
+        "Test viewpoint No.9〜11 của DD-F002 đạt"
+      ],
+      "spec_refs": [
+        "F-003",
+        "DD-F002-account-participant-self-view",
+        "SCR-005",
+        "SCR-006"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — giờ ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E00-07",
+        "E00-03a"
+      ],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E02-02a",
+          "title": "Viết create_participant / update_participant + PTY-03 / PTY-04",
+          "discipline": "BE",
+          "description": "Chuẩn hóa ở server (code toàn giác → bán giác chữ hoa, name_kana hiragana → katakana, chuỗi rỗng → NULL); hàm DB insert / update có FOR UPDATE + so updated_at; trigger chặn đổi kind; chặn đổi code; audit participant.create / participant.update trước / sau. Chỉ ROLE-005.",
+          "acceptance": [
+            "code 「ｎ－００１２」 khi đã có N-0012 → chuẩn hóa rồi 422 M_10",
+            "PTY-04 gửi kind khác → 422 M_PTY_03; đổi code → 422 M_PTY_51",
+            "Không có trường nào đổi → 422; updated_at lệch → 409 M_COM_17",
+            "ROLE-003 gọi PTY-03 → 403",
+            "pgTAP + Vitest"
+          ],
+          "spec_refs": [
+            "PTY-03",
+            "PTY-04",
+            "FN-participant-create_participant",
+            "FN-participant-update_participant",
+            "TBL-participants"
+          ],
+          "hours": 8,
+          "hours_basis": "2 hàm ghi đơn giản + chuẩn hóa chuỗi + trigger bất biến.",
+          "priority": "must",
+          "depends_on": [
+            "E00-02a",
+            "E00-08",
+            "E00-03a"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E02-02b",
+          "title": "Viết PTY-01 danh sách (tab sắp hết hạn) và PTY-02 chi tiết",
+          "discipline": "BE",
+          "description": "PTY-01 lọc loại / từ khóa, kèm tư cách hiện tại (gọi E02-01); tab expiring = kỳ 有効 có valid_to trong [D, D + N], N lấy từ notification_settings (eligibility_expiring), nhãn 更新済 khi có kỳ nối tiếp, sắp theo valid_to. PTY-02 hồ sơ + mọi kỳ + lịch sử + yêu cầu; ghi audit participant.view (truy cập dữ liệu cá nhân).",
+          "acceptance": [
+            "Đổi N = 45 → tab dùng 45 ngay ở lần gọi sau",
+            "Kỳ đã có kỳ nối tiếp hiển thị 更新済, không tính vào đếm",
+            "Mỗi lần mở PTY-02 có 1 dòng audit participant.view",
+            "Vai trò đúng theo API-LIST (PTY-01 không có ROLE-006); p95 ≤ 2 giây với dữ liệu năm 3"
+          ],
+          "spec_refs": [
+            "PTY-01",
+            "PTY-02",
+            "F-005",
+            "DD-F004-eligibility-daily-expiry-job",
+            "TBL-notification_settings"
+          ],
+          "hours": 8,
+          "hours_basis": "2 API đọc, 1 truy vấn cửa sổ ngày + nhãn nối tiếp + audit đọc.",
+          "priority": "must",
+          "depends_on": [
+            "E02-01",
+            "E00-02g"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E02-02c",
+          "title": "Dựng màn SCR-005 danh sách người tham gia + tab 期限切れ間近",
+          "discipline": "FE",
+          "description": "Bảng người tham gia (mã, tên, loại, căn cứ, trạng thái, 失効日), bộ lọc loại / từ khóa, tab sắp hết hạn với số ngày còn lại và nhãn 更新済, link sang SCR-006.",
+          "acceptance": [
+            "Đủ cột / bộ lọc / thông báo theo SCR-005",
+            "Bộ lọc giữ trên query string (CS-20)",
+            "Test component tab và trạng thái rỗng"
+          ],
+          "spec_refs": [
+            "SCR-005",
+            "PTY-01"
+          ],
+          "hours": 8,
+          "hours_basis": "1 màn danh sách 2 tab dùng component nền E00-12c.",
+          "priority": "must",
+          "depends_on": [
+            "E02-02b",
+            "E00-12c"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E02-02d",
+          "title": "Dựng màn SCR-006 phần xem: hồ sơ, kỳ hiệu lực, lịch sử trạng thái",
+          "discipline": "FE",
+          "description": "Hiển thị hồ sơ, danh sách kỳ (kể cả 失効), lịch sử chuyển trạng thái, yêu cầu tư cách; căn cứ hiển thị chỉ đọc theo loại; chế độ xem cho ROLE-003 / 006 / 010 / 011.",
+          "acceptance": [
+            "Đủ khối thông tin theo SCR-006",
+            "Vai trò chỉ xem không thấy nút ghi",
+            "Test component cho 4 loại người tham gia"
+          ],
+          "spec_refs": [
+            "SCR-006",
+            "PTY-02"
+          ],
+          "hours": 8,
+          "hours_basis": "Màn chi tiết nhiều khối dữ liệu, không có ghi.",
+          "priority": "must",
+          "depends_on": [
+            "E02-02b",
+            "E00-12a"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E02-02e",
+          "title": "Dựng màn SCR-006 phần ghi: tạo / sửa hồ sơ",
+          "discipline": "FE",
+          "description": "Form tạo (chọn loại, không đổi được sau khi tạo) và sửa hồ sơ, validate client cùng message ID, sau khi tạo hiện M_PTY_05 + nút lập yêu cầu 登録 (SCR-007).",
+          "acceptance": [
+            "Ô loại và mã bị khóa ở chế độ sửa",
+            "Lỗi 422 / 409 hiển thị đúng CS-15 / CS-17",
+            "Test component form"
+          ],
+          "spec_refs": [
+            "SCR-006",
+            "PTY-03",
+            "PTY-04"
+          ],
+          "hours": 8,
+          "hours_basis": "Form 9 trường, 2 chế độ tạo / sửa.",
+          "priority": "must",
+          "depends_on": [
+            "E02-02a",
+            "E02-02d"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E02-03",
+      "title": "Hiện thực yêu cầu tư cách và duyệt maker ≠ checker (F-004)",
+      "discipline": "BE",
+      "description": "Luồng 登録 / 更新 / 復帰 / 再審査 → 承認 / 却下 tạo kỳ hiệu lực và lịch sử; hộp chờ duyệt cho ROLE-006.",
+      "acceptance": [
+        "Test viewpoint No.1〜4, 6〜8, 10, 12〜17 của DD-F004-eligibility-request-approval đạt"
+      ],
+      "spec_refs": [
+        "F-004",
+        "DD-F004-eligibility-request-approval",
+        "STATE-MACHINES"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — giờ ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E02-01",
+        "E00-04b"
+      ],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E02-03a",
+          "title": "Viết eligibility_request_create + ELG-01 lập yêu cầu",
+          "discipline": "DB",
+          "description": "Khóa participants → các kỳ FOR UPDATE; kiểm theo thứ tự: yêu cầu mở (M_ELG_02) → ma trận loại yêu cầu × kind × trạng thái hiện tại (M_ELG_50 / M_ELG_14) → 更新 liền kỳ (M_ELG_03) → chồng kỳ (M_ELG_04); basis suy từ kind; 再審査 chuyển kỳ đích sang 再審査 + lịch sử; gắn bằng chứng qua helper file ref; phát eligibility_request; audit. Route ELG-01 bắt buộc 1〜5 bằng chứng.",
+          "acceptance": [
+            "仲卸 đăng ký → basis 許可, không nhận basis từ client",
+            "復帰 cho 売買参加者 → M_ELG_50; 登録 khi đã có kỳ → M_ELG_14",
+            "更新 bắt đầu khác valid_to + 1 → M_ELG_03; kỳ chồng → M_ELG_04",
+            "Không có bằng chứng → 400 M_01",
+            "pgTAP phủ đủ 5 dòng ma trận loại × trạng thái"
+          ],
+          "spec_refs": [
+            "ELG-01",
+            "FN-eligibility-eligibility_request_create",
+            "TBL-eligibility_requests",
+            "TBL-eligibility_periods",
+            "TBL-eligibility_status_histories",
+            "TBL-attachments"
+          ],
+          "hours": 12,
+          "hours_basis": "Ma trận 5 tổ hợp loại × kind × trạng thái + 4 lỗi theo thứ tự + nhánh 再審査 ghi lịch sử.",
+          "priority": "must",
+          "depends_on": [
+            "E02-01",
+            "E00-04b",
+            "E00-03a"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E02-03b",
+          "title": "Viết eligibility_request_decide + ELG-03 承認 / 却下",
+          "discipline": "DB",
+          "description": "Khóa participants → eligibility_requests → eligibility_periods FOR UPDATE; kiểm 申請中 + updated_at (CONFLICT), người duyệt ≠ người lập (M_ELG_01), kiểm lại toàn bộ điều kiện lúc lập; 承認: tạo kỳ mới (有効 / 有効(予定)) hoặc chuyển kỳ đích về 有効, 再審査 từ 失効 đóng kỳ cũ; 却下: kỳ đích về status_before hoặc 失効 nếu đã quá valid_to; lịch sử + phát eligibility_request / eligibility_changed + audit. Route bắt buộc AAL2 ROLE-006, 却下 bắt buộc lý do.",
+          "acceptance": [
+            "Người lập tự duyệt → 422 M_ELG_01",
+            "2 ROLE-006 duyệt cùng yêu cầu song song → 1 thành công, 1 nhận 409",
+            "再審査 từ 一時停止 bị 却下 sau khi valid_to đã qua → kỳ 失効",
+            "Kỳ đích đổi trạng thái trong lúc chờ → 422 M_ELG_86",
+            "pgTAP cho 3 nhánh 承認 × loại và 2 nhánh 却下"
+          ],
+          "spec_refs": [
+            "ELG-03",
+            "FN-eligibility-eligibility_request_decide",
+            "TBL-eligibility_requests",
+            "TBL-eligibility_periods",
+            "TBL-eligibility_status_histories",
+            "STATE-MACHINES"
+          ],
+          "hours": 16,
+          "hours_basis": "5 nhánh kết quả theo loại, kiểm lại toàn bộ điều kiện sau khóa, tương tranh 2 người duyệt, 2 loại thông báo.",
+          "priority": "must",
+          "depends_on": [
+            "E02-03a"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E02-03c",
+          "title": "Viết ELG-02 hộp chờ duyệt và ELG-04 chi tiết yêu cầu",
+          "discipline": "BE",
+          "description": "ELG-02 gộp 資格申請 申請中 và 修正申請 申請中 cho người duyệt (ROLE-006 thao tác; ROLE-003 / 005 / 010 / 011 chỉ xem, ROLE-010 không thấy 修正申請). ELG-04 yêu cầu + kỳ đề nghị + danh sách bằng chứng (ROLE-003 / 010 chỉ thấy số tệp).",
+          "acceptance": [
+            "ELG-02 trả cả 2 loại phiếu đúng phạm vi từng vai trò",
+            "ROLE-003 gọi ELG-04 chỉ nhận số tệp, không nhận metadata tệp",
+            "Vitest cho lọc theo vai trò"
+          ],
+          "spec_refs": [
+            "ELG-02",
+            "ELG-04",
+            "F-004",
+            "F-021",
+            "TBL-correction_requests"
+          ],
+          "hours": 8,
+          "hours_basis": "2 API đọc với lọc phạm vi theo 5 vai trò; ghép 2 nguồn phiếu.",
+          "priority": "must",
+          "depends_on": [
+            "E02-03a",
+            "E00-02d"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E02-03d",
+          "title": "Dựng màn SCR-007 lập yêu cầu tư cách và quyết định",
+          "discipline": "FE",
+          "description": "Form chọn loại yêu cầu (chỉ hiện loại hợp lệ theo kind + trạng thái), số giấy tờ, kỳ đề nghị (ẩn khi 復帰 / 再審査 từ 一時停止), lý do, tải bằng chứng (component E00-04d); chế độ ROLE-006 xem chi tiết + 承認 / 却下 có lý do.",
+          "acceptance": [
+            "Loại yêu cầu hiển thị khớp ma trận DD-F004 §1",
+            "Căn cứ hiển thị chỉ đọc theo loại",
+            "Lỗi M_ELG_* hiển thị tại ô / đầu form",
+            "Test component 2 chế độ"
+          ],
+          "spec_refs": [
+            "SCR-007",
+            "ELG-01",
+            "ELG-03",
+            "ELG-04"
+          ],
+          "hours": 12,
+          "hours_basis": "Form động theo ma trận loại × trạng thái + chế độ duyệt + tải tệp.",
+          "priority": "must",
+          "depends_on": [
+            "E02-03b",
+            "E02-03c",
+            "E00-04d"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E02-03e",
+          "title": "Dựng màn SCR-004 hộp chờ duyệt",
+          "discipline": "FE",
+          "description": "Danh sách gộp 資格申請 và 修正申請 申請中, lọc loại, mở SCR-007 (tư cách) hoặc SCR-024 (điều chỉnh); chế độ chỉ xem cho vai trò không duyệt.",
+          "acceptance": [
+            "Đủ cột / lọc theo SCR-004",
+            "Click dòng điều hướng đúng màn theo loại phiếu",
+            "Test component"
+          ],
+          "spec_refs": [
+            "SCR-004",
+            "ELG-02"
+          ],
+          "hours": 8,
+          "hours_basis": "1 màn danh sách gộp 2 loại dòng.",
+          "priority": "must",
+          "depends_on": [
+            "E02-03c",
+            "E00-12c"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E02-04",
+      "title": "Hiện thực tạm ngưng tư cách ngay (ELG-05)",
+      "discipline": "BE",
+      "description": "Tạm ngưng không cần duyệt cho kỳ đang 有効, có lý do + bằng chứng, có hiệu lực ngay với lô / giao dịch / giao hàng.",
+      "acceptance": [
+        "Test viewpoint No.5, 11 của DD-F004-eligibility-request-approval đạt"
+      ],
+      "spec_refs": [
+        "F-004",
+        "ELG-05",
+        "DD-F004-eligibility-request-approval"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — giờ ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E02-01"
+      ],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E02-04a",
+          "title": "Viết eligibility_suspend + route ELG-05",
+          "discipline": "DB",
+          "description": "Khóa kỳ phủ hôm nay FOR UPDATE; khác 有効 → M_ELG_06; chuyển 一時停止, insert lịch sử có lý do (CHECK), gắn bằng chứng vào eligibility_status_histories, phát eligibility_changed tới ROLE-006 + người tham gia, audit eligibility.suspend. Route kiểm updated_at, 1〜5 bằng chứng.",
+          "acceptance": [
+            "Kỳ 失効 / 再審査 / 一時停止 / 有効(予定) / không có kỳ → 422 M_ELG_06",
+            "Sau tạm ngưng, eligibility_is_valid_on(hôm nay) = false ngay",
+            "updated_at lệch → 409",
+            "pgTAP + Vitest"
+          ],
+          "spec_refs": [
+            "ELG-05",
+            "FN-eligibility-eligibility_suspend",
+            "TBL-eligibility_periods",
+            "TBL-eligibility_status_histories"
+          ],
+          "hours": 8,
+          "hours_basis": "1 chuyển trạng thái, 5 trạng thái nguồn bị chặn, gắn tệp + thông báo.",
+          "priority": "must",
+          "depends_on": [
+            "E02-01",
+            "E00-04b",
+            "E00-03a"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E02-04b",
+          "title": "Dựng dialog 一時停止 trên SCR-006",
+          "discipline": "FE",
+          "description": "Nút 一時停止 chỉ hiện khi kỳ hiện tại 有効 và người dùng là ROLE-005; dialog lý do + bằng chứng, xác nhận, cập nhật lại kỳ / lịch sử sau khi thành công.",
+          "acceptance": [
+            "Nút ẩn với trạng thái khác 有効",
+            "Thiếu lý do / bằng chứng báo lỗi tại ô",
+            "Test component"
+          ],
+          "spec_refs": [
+            "SCR-006",
+            "ELG-05"
+          ],
+          "hours": 4,
+          "hours_basis": "1 dialog dùng lại component tải tệp.",
+          "priority": "must",
+          "depends_on": [
+            "E02-04a",
+            "E02-02d",
+            "E00-04d"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E02-05",
+      "title": "Viết job eligibility_daily 02:00 JST (失効 / kích hoạt kỳ)",
+      "discipline": "DB",
+      "description": "Hàm job chạy qua khung E00-05: lô ≤ 500 dòng, khóa kỳ theo id tăng dần; 有効(予定) tới valid_from → 有効; 有効 / 一時停止 quá valid_to → 失効 (effective_date = valid_to + 1, changed_by NULL, job_run_id); không đụng 再審査; audit người = hệ thống; phát eligibility_changed; idempotent theo trạng thái nguồn.",
+      "acceptance": [
+        "Test viewpoint No.1, 3, 3a, 4, 5, 6, 8, 13 của DD-F004-eligibility-daily-expiry-job đạt",
+        "Chạy lại slot đã 成功 không tạo lịch sử trùng",
+        "Ép lỗi giữa chừng → không thay đổi dở dang, job_runs 失敗",
+        "pgTAP"
+      ],
+      "spec_refs": [
+        "F-004",
+        "FN-eligibility-eligibility_daily",
+        "DD-F004-eligibility-daily-expiry-job",
+        "ADR-009",
+        "TBL-job_runs"
+      ],
+      "hours": 8,
+      "hours_basis": "2 chuyển trạng thái theo lô + ngoại lệ 再審査 + idempotent + audit / thông báo hệ thống.",
+      "priority": "must",
+      "depends_on": [
+        "E02-01",
+        "E00-05a",
+        "E00-03a"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E02-06",
+      "title": "Viết job eligibility_expiry_notice 01:30 JST (nhắc sắp hết hạn)",
+      "discipline": "DB",
+      "description": "Chọn kỳ 有効 có valid_to trong [D, D + N], chưa có kỳ nối tiếp, chưa từng được báo (theo notifications); phát eligibility_expiring 1 lần / kỳ với due_at theo send_time; sự kiện tắt → 成功 với 0; không audit nghiệp vụ.",
+      "acceptance": [
+        "Chạy 3 ngày liên tiếp → 1 thông báo duy nhất cho 1 kỳ",
+        "Kỳ đã có kỳ nối tiếp → không báo",
+        "Đổi N → dùng giá trị mới ở lần chạy sau",
+        "pgTAP"
+      ],
+      "spec_refs": [
+        "F-005",
+        "F-026",
+        "FN-eligibility-eligibility_expiry_notice",
+        "DD-F004-eligibility-daily-expiry-job",
+        "TBL-notification_settings",
+        "TBL-notifications"
+      ],
+      "hours": 4,
+      "hours_basis": "1 truy vấn chọn + chống báo trùng, logic gửi nằm ở E08.",
+      "priority": "must",
+      "depends_on": [
+        "E02-01",
+        "E00-05a"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E02-07",
+      "title": "Hiện thực ROLE-012 tự xem tư cách và thông báo (F-006)",
+      "discipline": "BE",
+      "description": "Người tham gia ngoài chỉ thấy dữ liệu của chính mình, phạm vi lấy từ phiên.",
+      "acceptance": [
+        "Test viewpoint No.12〜14 của DD-F002 đạt"
+      ],
+      "spec_refs": [
+        "F-006",
+        "DD-F002-account-participant-self-view",
+        "SCR-008"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — giờ ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E02-01",
+        "E01-03"
+      ],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E02-07a",
+          "title": "Viết ELG-06 GET /api/me/eligibility",
+          "discipline": "BE",
+          "description": "participant_id lấy từ profiles của phiên; trả mã, tên, loại, kỳ hiện tại (basis, license_no, valid_from, valid_to, status), kỳ kế tiếp, kỳ đã qua, yêu cầu 申請中, N, remaining_days; không trả lý do tạm ngưng, người duyệt, bằng chứng, ghi chú quyết định.",
+          "acceptance": [
+            "Vai trò khác ROLE-012 → 403 M_19; participant_id NULL → 403 M_AUTH_04",
+            "Response không chứa trường nội bộ (test so khóa JSON)",
+            "Vitest"
+          ],
+          "spec_refs": [
+            "ELG-06",
+            "F-006",
+            "FN-eligibility-eligibility_is_valid_on",
+            "PREMISE"
+          ],
+          "hours": 4,
+          "hours_basis": "1 API đọc, phạm vi từ phiên, danh sách trường trả về cố định.",
+          "priority": "must",
+          "depends_on": [
+            "E02-01",
+            "E00-07"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E02-07b",
+          "title": "Dựng màn SCR-008 tư cách & thông báo của tôi (tablet dùng chung)",
+          "discipline": "FE",
+          "description": "Thẻ tư cách hiện tại + kỳ kế tiếp, banner M_ELG_17 / M_ELG_18 / M_PTY_05 theo trạng thái, danh sách thông báo của mình (NTF-01 / NTF-02 thuộc E08), không lưu dữ liệu vào localStorage / IndexedDB, chữ ≥ 16 px.",
+          "acceptance": [
+            "valid_to = hôm nay + 10, N = 30 → banner M_ELG_17 còn 10 ngày",
+            "Đăng xuất xóa sạch dữ liệu đã hiển thị",
+            "Kiểm axe mức AA không lỗi",
+            "Test component các banner"
+          ],
+          "spec_refs": [
+            "SCR-008",
+            "ELG-06",
+            "NTF-01",
+            "NTF-02"
+          ],
+          "hours": 8,
+          "hours_basis": "1 màn tablet 2 khối + 4 biến thể banner + yêu cầu không cache.",
+          "priority": "must",
+          "depends_on": [
+            "E02-07a",
+            "E00-12a"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E02-08",
+      "title": "Hiện thực trang chủ theo vai trò (DASH-01, SCR-002)",
+      "discipline": "BE",
+      "description": "Bộ đếm theo vai trò: chờ duyệt, sắp hết hạn (F-005), ngày chưa khóa, chờ giao, thông báo chưa đọc; ROLE-012 không vào SCR-002.",
+      "acceptance": [
+        "Mỗi vai trò ROLE-001〜011 thấy đúng thẻ đếm theo SCR-002"
+      ],
+      "spec_refs": [
+        "F-005",
+        "F-026",
+        "SCR-002",
+        "DASH-01"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — giờ ở sub-issue.",
+      "priority": "should",
+      "depends_on": [
+        "E02-02b"
+      ],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E02-08a",
+          "title": "Viết DASH-01 GET /api/dashboard",
+          "discipline": "BE",
+          "description": "Trả bộ đếm theo vai trò hiệu lực (hợp nếu nhiều vai trò): yêu cầu / phiếu chờ duyệt, kỳ sắp hết hạn trong N ngày (không tính kỳ đã nối tiếp), 業務日 chưa khóa, giao dịch chờ giao, thông báo chưa đọc; ROLE-012 → 403.",
+          "acceptance": [
+            "ROLE-012 gọi → 403 M_19",
+            "Đếm sắp hết hạn khớp PTY-01 tab expiring",
+            "p95 ≤ 2 giây với dữ liệu năm 3",
+            "Vitest cho từng vai trò"
+          ],
+          "spec_refs": [
+            "DASH-01",
+            "F-005",
+            "F-026",
+            "DD-F004-eligibility-daily-expiry-job",
+            "FN-common-getBusinessDay"
+          ],
+          "hours": 8,
+          "hours_basis": "5 truy vấn đếm trên 5 miền khác nhau, lọc theo vai trò.",
+          "priority": "should",
+          "depends_on": [
+            "E02-02b",
+            "E00-10",
+            "E00-02g"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E02-08b",
+          "title": "Dựng màn SCR-002 trang chủ theo vai trò",
+          "discipline": "FE",
+          "description": "Thẻ đếm theo vai trò có link sang màn tương ứng, khối thông báo mới, giao diện nút lớn cho tablet hiện trường.",
+          "acceptance": [
+            "Snapshot thẻ cho 11 vai trò",
+            "Click thẻ điều hướng đúng màn đích",
+            "Test component"
+          ],
+          "spec_refs": [
+            "SCR-002",
+            "DASH-01"
+          ],
+          "hours": 8,
+          "hours_basis": "11 biến thể theo vai trò, PC + tablet.",
+          "priority": "should",
+          "depends_on": [
+            "E02-08a",
+            "E00-12a"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E02-09",
+      "title": "Xây bộ test vector 「hợp lệ tại ngày D」 cho 4 loại người tham gia",
+      "discipline": "QA",
+      "description": "Bộ dữ liệu + pgTAP chạy hàm eligibility_is_valid_on / reason trên ma trận 4 loại × 6 trạng thái × biên ngày (valid_from, valid_to, valid_to + 1, ngày tạm ngưng, ngày quá khứ, kỳ nối tiếp, job chưa chạy); dùng lại làm hồi quy cho E03 / E04 / E05.",
+      "acceptance": [
+        "≥ 40 ca vector, mỗi ca ghi nguồn AC (F-004 AC-3〜AC-10, ADR-010)",
+        "Chạy trong CI, thời gian < 1 phút",
+        "Kết quả lý do đúng căn cứ cho cả 4 loại"
+      ],
+      "spec_refs": [
+        "F-004",
+        "FN-eligibility-eligibility_is_valid_on",
+        "FN-eligibility-participant_eligibility_reason",
+        "DD-F004-eligibility-request-approval",
+        "DD-F004-eligibility-daily-expiry-job",
+        "ADR-010"
+      ],
+      "hours": 8,
+      "hours_basis": "Ma trận 4 loại × 6 trạng thái × 6 biên ngày cần dữ liệu dựng tay và đối chiếu AC.",
+      "priority": "should",
+      "depends_on": [
+        "E02-01",
+        "E02-05",
+        "E00-16"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    }
+  ],
+  "spec_not_issued": [
+    {
+      "spec": "NTF-01 / NTF-02 (dùng trên SCR-008, SCR-003) và hàm notify_event / gửi email",
+      "reason": "Thuộc F-026 → E08; E02 chỉ gọi notify_event và hiển thị kết quả trên SCR-008."
+    },
+    {
+      "spec": "Màn SCR-003 danh sách thông báo",
+      "reason": "F-026 → E08."
+    },
+    {
+      "spec": "Cảnh báo ops_watchdog khi slot eligibility_daily quá hạn 10 phút",
+      "reason": "F-034 → E11."
+    },
+    {
+      "spec": "Nạp tư cách người tham gia từ nguồn cũ (migration)",
+      "reason": "F-036 → E11."
+    }
+  ],
+  "spec_gaps": [
+    {
+      "spec": "DD-F004-eligibility-daily-expiry-job §3.2 vs DB-INITIAL-DATA §2.5",
+      "gap": "DD nói người nhận mặc định eligibility_expiring là ROLE-003 / ROLE-005 / ROLE-010 (ma trận F-005); seed notification_settings chỉ có ROLE-005, ROLE-003.",
+      "proposal": "sửa thiết kế",
+      "note": "Đề xuất thêm ROLE-010 vào seed (E08 nạp); E02-06 đọc người nhận từ bảng, không hard-code."
+    },
+    {
+      "spec": "API-LIST ELG-04 vs DD-F004-eligibility-request-approval §5",
+      "gap": "API-LIST cho ELG-04 vai trò ROLE-003, 005, 006, 010, 011 (ROLE-003 / 010 chỉ thấy số tệp); DD §5.1 chỉ liệt kê ROLE-005, 006, 011.",
+      "proposal": "sửa thiết kế",
+      "note": "Làm theo API-LIST (bản cập nhật 2026-11-10); sửa DD."
+    },
+    {
+      "spec": "API-LIST PTY-01 vs SCREEN-LIST §3",
+      "gap": "PTY-01 đã bỏ ROLE-006 (2026-11-10) nhưng menu README §3 vẫn đề xuất SCR-005 cho ROLE-006 làm đường vào SCR-006; ROLE-006 hiện chỉ vào SCR-006 qua SCR-004.",
+      "proposal": "issue làm rõ",
+      "note": "PL chốt: giữ bỏ ROLE-006 khỏi SCR-005 thì xóa đề xuất ở README §3."
+    },
+    {
+      "spec": "DD-F004-eligibility-request-approval §4 vs DB-TABLES-LIST §3 No.6",
+      "gap": "Hàm hợp lệ coi 有効(予定) là hợp lệ tại ngày trong kỳ, nhưng trạng thái tại D lấy từ dòng lịch sử có effective_date ≤ D; kỳ 有効(予定) tạo khi duyệt có history effective_date = valid_from — cần đảm bảo không có dòng nào ở ngày trước valid_from, nếu không ngày đó vẫn không hợp lệ vì ngoài khoảng kỳ. Không mâu thuẫn nhưng DD không nêu rõ ca hỏi D < valid_from.",
+      "proposal": "giả định",
+      "note": "Test vector E02-09 phủ ca D < valid_from → false."
+    },
+    {
+      "spec": "F-004 / FN-eligibility-eligibility_request_decide",
+      "gap": "Thông báo kết quả duyệt gửi người lập theo requested_by (DB-INITIAL-DATA §2.5) nhưng notify_event chỉ nhận event_type + entity; cách truyền người nhận cụ thể chưa rõ trong FN.",
+      "proposal": "issue làm rõ",
+      "note": "Phối hợp với E08 khi chốt chữ ký notify_event."
+    }
+  ]
+}

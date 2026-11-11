@@ -1,0 +1,1428 @@
+{
+  "epic": "E11",
+  "title": "Offline, giám sát vận hành, lưu trữ chứng từ, migration",
+  "f_ids": [
+    "F-033",
+    "F-034",
+    "F-035",
+    "F-036"
+  ],
+  "summary": "Hàng đợi offline PWA cho tiếp nhận lô + ghi giao hàng với replay idempotent và xử lý 要照合; giám sát vận hành (health, ops_watchdog A-2〜A-12, xác nhận cảnh báo, chạy lại job, kích hoạt bản sao DR); vòng đời tệp đính kèm sau khi tải lên (tải xuống, dọn vùng tạm, lưu trữ lạnh, khôi phục); công cụ migration 3 nguồn + đối chiếu + go / no-go.",
+  "issues": [
+    {
+      "key": "E11-01",
+      "title": "Viết hàm sync_apply_operation kiểm Idempotency-Key cho replay",
+      "discipline": "DB",
+      "description": "Hàm gọi ở đầu create_lot / record_delivery (theo hướng FN, xem spec_gaps): tra client_op_id trong sync_operations — đã có cùng payload → trả kết quả cũ (Idempotent-Replayed), khác payload → CONFLICT M_COM_17; chưa có → INSERT dòng 適用済 (op_type, device_id, profile_id, captured_at, received_at, result_entity_id) cùng transaction với bản ghi nghiệp vụ. Sau purge 30 ngày vẫn trả bản ghi cũ qua client_op_id UNIQUE ở lots / deliveries.",
+      "acceptance": [
+        "Cùng key cùng payload ×2 → 1 bản ghi nghiệp vụ, lần 2 trả kết quả cũ",
+        "Cùng key khác payload → 409 M_COM_17",
+        "Rollback nghiệp vụ không để lại dòng 適用済",
+        "Dòng 適用済 đã bị purge → vẫn trả bản ghi cũ nhờ client_op_id của lots / deliveries"
+      ],
+      "spec_refs": [
+        "FN-sync-sync_apply_operation",
+        "DD-F033-offline-sync-replay",
+        "TBL-sync_operations",
+        "ADR-006"
+      ],
+      "hours": 8,
+      "hours_basis": "3 nhánh idempotency + so payload chuẩn hóa + đường dự phòng sau purge.",
+      "priority": "must",
+      "depends_on": [
+        "E00-02g",
+        "E00-03a"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-02",
+      "title": "Viết sync_record_rejection và helper route ghi 要照合 khi replay bị từ chối",
+      "discipline": "BE",
+      "description": "Hàm DB INSERT sync_operations 要照合 (reject_reason = Message ID | 文言), đã có dòng 要照合 cùng key → chỉ cập nhật received_at. Helper TS dùng chung cho LOT-02 / DLV-03: khi request có X-Queued: 1 và rpc trả BIZ → transaction riêng gọi sync_record_rejection + writeAuditLog sync.reject (拒否) rồi trả 422; request online không có X-Queued không tạo 要照合.",
+      "acceptance": [
+        "Replay vi phạm quy tắc → 422 + 1 dòng 要照合 + 1 dòng audit 拒否",
+        "Gửi lại lần 2 cùng key bị từ chối → không thêm dòng, received_at cập nhật",
+        "Request online bị 422 → không có dòng sync_operations"
+      ],
+      "spec_refs": [
+        "FN-sync-sync_record_rejection",
+        "DD-F033-offline-sync-replay",
+        "LOT-02",
+        "DLV-03",
+        "FN-common-writeAuditLog"
+      ],
+      "hours": 8,
+      "hours_basis": "1 hàm DB nhỏ + helper route dùng ở 2 API với transaction tách sau rollback.",
+      "priority": "must",
+      "depends_on": [
+        "E11-01",
+        "E00-03b",
+        "E00-08"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-03",
+      "title": "Viết hàm sync_resolve (破棄 / 再登録) và nới CHECK sync_operations",
+      "discipline": "DB",
+      "description": "Dòng 要照合 FOR UPDATE → 照合済 + resolution, resolved_by, resolved_at; mục chỉ tồn tại cục bộ (chưa từng tới server) → INSERT thẳng dòng 照合済 có payload làm bằng chứng; 再登録 nối key cũ → key mới (result_entity_id của thao tác mới); audit sync.resolve có reason. Kèm migration nới sync_operations_applied_check thành chiều 適用済 ⇒ có result_entity_id.",
+      "acceptance": [
+        "破棄 thiếu lý do → M_01; mục đã 適用済 / 照合済 → M_COM_17",
+        "Mục của người khác → NOTFOUND (404)",
+        "再登録 ghi được result_entity_id trên dòng 照合済 sau khi nới CHECK"
+      ],
+      "spec_refs": [
+        "FN-sync-sync_resolve",
+        "DD-F033-offline-sync-replay",
+        "TBL-sync_operations",
+        "FN-audit-audit_append"
+      ],
+      "hours": 8,
+      "hours_basis": "3 nhánh (có dòng / chưa có dòng / 再登録) + migration sửa CHECK.",
+      "priority": "must",
+      "depends_on": [
+        "E11-01",
+        "E00-03a"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-04",
+      "title": "Dựng API SYNC-01 tra kết quả key và SYNC-02 ghi xử lý mục",
+      "discipline": "BE",
+      "description": "SYNC-01: nhận ≤ 200 client_op_id, chỉ trả mục của người gọi với status 適用済 / 要照合 / 照合済 / 未受信 + result_entity / reject_reason. SYNC-02: body resolution, lý do, key mới hoặc payload / captured_at khi mục chưa tới server → rpc sync_resolve → M_SYNC_03 / M_SYNC_04. Chỉ ROLE-001 / ROLE-004.",
+      "acceptance": [
+        "Key không có trên server → 未受信",
+        "ROLE-003 gọi → 403 M_19",
+        "> 200 key → 400"
+      ],
+      "spec_refs": [
+        "SYNC-01",
+        "SYNC-02",
+        "DD-F033-offline-sync-replay"
+      ],
+      "hours": 4,
+      "hours_basis": "2 route mỏng bọc 1 truy vấn và 1 rpc có sẵn.",
+      "priority": "must",
+      "depends_on": [
+        "E11-03",
+        "E00-07"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-05",
+      "title": "Viết hàm job sync_operations_purge",
+      "discipline": "DB",
+      "description": "Job 11:30 JST theo khung ADR-009: xóa dòng 適用済 có received_at < now − 30 ngày theo lô, giữ 要照合 / 照合済; processed_count = số dòng xóa. Chưa có FN spec — làm theo ADR-009 và DD-F033 §6.",
+      "acceptance": [
+        "Dòng 適用済 31 ngày bị xóa, dòng 要照合 cùng tuổi giữ nguyên",
+        "Lỗi → job_runs 失敗 + job_failed"
+      ],
+      "spec_refs": [
+        "DD-F033-offline-sync-replay",
+        "ADR-009",
+        "TBL-sync_operations",
+        "TBL-job_runs"
+      ],
+      "hours": 2,
+      "hours_basis": "1 câu DELETE theo lô trong khung job có sẵn.",
+      "priority": "should",
+      "depends_on": [
+        "E00-05a",
+        "E11-01"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-06",
+      "title": "Hiện thực hàng đợi offline PWA (service worker + IndexedDB) dùng chung",
+      "discipline": "FE",
+      "description": "Phần client của ADR-006 cho 2 thao tác ロット受付 và 引渡し記録: một đường code cho online và replay, xếp hàng chỉ khi lỗi mạng, replay tuần tự theo occurred_at.",
+      "acceptance": [
+        "Mọi sub-issue xong"
+      ],
+      "spec_refs": [
+        "ADR-006",
+        "DD-F033-offline-sync-replay",
+        "SCR-021"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — tổng giờ nằm ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E00-12a",
+        "E00-12b"
+      ],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E11-06a",
+          "title": "Đăng ký service worker, manifest PWA và cache dữ liệu tra cứu",
+          "discipline": "FE",
+          "description": "Manifest + service worker cache app shell cho /lots/new và màn giao hàng; cache LOT-03 và DLV-01 làm mới mỗi 5 phút khi online, offline dùng cache kèm M_LOT_07; không cache token / dữ liệu phiên.",
+          "acceptance": [
+            "Tắt mạng sau khi đã mở 1 lần → màn tiếp nhận lô vẫn mở được",
+            "Cache tra cứu có nhãn thời điểm, quá 5 phút làm mới khi online"
+          ],
+          "spec_refs": [
+            "ADR-006",
+            "DD-F033-offline-sync-replay",
+            "LOT-03"
+          ],
+          "hours": 8,
+          "hours_basis": "Cấu hình PWA trên Next.js + 2 chiến lược cache có hạn.",
+          "priority": "must",
+          "depends_on": [
+            "E00-12a",
+            "E03-03"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E11-06b",
+          "title": "Viết module hàng đợi IndexedDB và fetch wrapper sinh client_op_id",
+          "discipline": "FE",
+          "description": "Wrapper sinh client_op_id (UUID v4) trước khi gửi, header Idempotency-Key / X-Occurred-At / X-Device-Id; xếp hàng chỉ khi fetch reject hoặc timeout 10 giây không phản hồi (4xx không xếp hàng); mục {client_op_id, op_type, payload, occurred_at, device_id, user_id, attempts, local_status}; chặn 200 mục (M_SYNC_06), mục người khác (M_SYNC_08), lệch giờ > 5 phút so header Date (M_SYNC_05), thao tác ngoài phạm vi (M_COM_22); xóa ngay khi 2xx.",
+          "acceptance": [
+            "Phản hồi 422 hiện lỗi ngay, không vào hàng đợi",
+            "Mục thứ 201 bị chặn M_SYNC_06",
+            "Hàng đợi không chứa token / mật khẩu"
+          ],
+          "spec_refs": [
+            "ADR-006",
+            "DD-F033-offline-sync-replay",
+            "SCR-021"
+          ],
+          "hours": 12,
+          "hours_basis": "Lưu trữ IndexedDB + 5 điều kiện an toàn + phân loại lỗi mạng / HTTP.",
+          "priority": "must",
+          "depends_on": [
+            "E11-06a",
+            "E00-12b"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E11-06c",
+          "title": "Viết bộ replay tuần tự và đối chiếu kết quả qua SYNC-01",
+          "discipline": "FE",
+          "description": "Kích hoạt khi online + mỗi 30 giây (M_COM_12); gửi từng mục theo occurred_at với X-Queued: 1; 201 / 200 replayed → xóa; 409 / 422 → 要照合 cục bộ (M_SYNC_01 + error_description); mục > 24 giờ → 要照合 không gửi (M_SYNC_07); timeout sau khi gửi → SYNC-01 rồi xóa / đánh dấu / gửi lại; đăng xuất (AUTH-06) khi còn mục → M_COM_25.",
+          "acceptance": [
+            "Server đã nhận nhưng client timeout → SYNC-01 trả 適用済, mục bị xóa, không ghi đôi",
+            "Không gửi song song 2 mục",
+            "Đăng xuất khi còn 3 mục → cảnh báo M_COM_25"
+          ],
+          "spec_refs": [
+            "DD-F033-offline-sync-replay",
+            "SYNC-01",
+            "AUTH-06",
+            "ADR-006"
+          ],
+          "hours": 12,
+          "hours_basis": "Máy trạng thái 5 kết quả + nhánh timeout không chắc chắn + hook đăng xuất.",
+          "priority": "must",
+          "depends_on": [
+            "E11-06b",
+            "E11-04",
+            "E01-05"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E11-06d",
+          "title": "Gắn hàng đợi offline vào SCR-009, SCR-019 và badge 送信待ち ở header",
+          "discipline": "FE",
+          "description": "SCR-009: lưu offline hiện M_COM_10 + 仮番号 = 8 ký tự đầu client_op_id (M_LOT_05); SCR-019: M_DLV_06 và M_SYNC_11 khi lần giao bị đảo do xung đột; header tablet ROLE-001 / 004 có badge số mục chờ + link SCR-021 (CS-11). Phần màn SCR-019 gốc do epic giao hàng làm.",
+          "acceptance": [
+            "Mất mạng khi bấm 登録 → hiện 仮番号 in hoa 8 ký tự",
+            "Badge cập nhật khi hàng đợi thay đổi, ẩn khi 0"
+          ],
+          "spec_refs": [
+            "SCR-009",
+            "SCR-019",
+            "SCR-021",
+            "COMMON-SPEC"
+          ],
+          "hours": 8,
+          "hours_basis": "Nối vào 2 màn có sẵn + 1 badge header.",
+          "priority": "must",
+          "depends_on": [
+            "E11-06c",
+            "E03-04"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E11-07",
+      "title": "Dựng màn SCR-021 同期待ちキュー",
+      "discipline": "FE",
+      "description": "Danh sách mục cục bộ (送信待ち / 要照合) + mục 要照合 trên server của người dùng; dialog 破棄 bắt buộc lý do → SYNC-02; 再登録 mở lại màn gốc với dữ liệu, sau 2xx gọi SYNC-02 nối key; trạng thái offline / rỗng / người dùng khác; cảnh báo lệch giờ M_SYNC_05; vùng chạm cho găng tay.",
+      "acceptance": [
+        "破棄 không lý do → không gửi, hiện M_01",
+        "再登録 thành công → mục cũ 照合済, hiện M_SYNC_04",
+        "Đăng nhập người B trên tablet có mục của A → M_SYNC_08, không gửi"
+      ],
+      "spec_refs": [
+        "SCR-021",
+        "SYNC-01",
+        "SYNC-02",
+        "DD-F033-offline-sync-replay"
+      ],
+      "hours": 12,
+      "hours_basis": "Ghép 2 nguồn (IndexedDB + server) + 2 luồng xử lý + 4 trạng thái màn.",
+      "priority": "must",
+      "depends_on": [
+        "E11-04",
+        "E11-06c",
+        "E00-12c"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-08",
+      "title": "Viết bộ test vector offline replay và xung đột giao hàng",
+      "discipline": "QA",
+      "description": "Theo 16 viewpoint DD-F033: gửi trùng, key dùng lại sai, 卸売業者 bị tạm ngưng khi offline, ngày đã khóa, 24 giờ, 200 mục, người dùng khác, timeout không rõ, purge; 2 tablet cùng giao trên số còn lại (sớm hơn thắng, lần muộn bị đảo 同期競合 hoặc 要照合, không âm) và online thắng replay. Phần đảo lần giao nằm trong record_delivery của epic giao hàng; bộ test này kiểm tích hợp.",
+      "acceptance": [
+        "16 viewpoint có test tự động (pgTAP cho server, Vitest + fake IndexedDB cho client)",
+        "Kịch bản 2 tablet chạy 50 lần không có remaining_qty âm"
+      ],
+      "spec_refs": [
+        "DD-F033-offline-sync-replay",
+        "ADR-006",
+        "FN-sync-sync_apply_operation",
+        "FN-delivery-record_delivery"
+      ],
+      "hours": 12,
+      "hours_basis": "16 kịch bản trải server + client, 1 kịch bản tương tranh nhiều thiết bị.",
+      "priority": "must",
+      "depends_on": [
+        "E11-02",
+        "E11-03",
+        "E11-06c",
+        "E03-02",
+        "E00-16",
+        "E05-01c"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-09",
+      "title": "Hoàn thiện OPS-01 /api/health cho giám sát ngoài",
+      "discipline": "BE",
+      "description": "Bearer CRON_SECRET so bằng timingSafeEqual; select nhẹ business_days với timeout 3 giây; 200 {ok: true} / 503 {ok: false} không bọc data; không audit, lỗi log ERROR category ops. Thay route keep-alive prototype.",
+      "acceptance": [
+        "Không header → 401",
+        "DB tắt / chậm > 3 giây → 503"
+      ],
+      "spec_refs": [
+        "OPS-01",
+        "DD-F034-ops-monitoring-alerts"
+      ],
+      "hours": 2,
+      "hours_basis": "1 route nhỏ có sẵn ở prototype, thêm guard secret và timeout.",
+      "priority": "must",
+      "depends_on": [
+        "E00-01",
+        "E00-15"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-10",
+      "title": "Hiện thực job ops_watchdog sinh cảnh báo vận hành",
+      "discipline": "DB",
+      "description": "Hàm job mỗi 5 phút chạy bảng luật A-2〜A-9, A-12, INSERT ops_alerts 未対応 có chống trùng theo alert_code + đối tượng, gọi notify_event cho Critical khi luật nguồn chưa gửi.",
+      "acceptance": [
+        "Mọi sub-issue xong"
+      ],
+      "spec_refs": [
+        "FN-ops-ops_watchdog",
+        "DD-F034-ops-monitoring-alerts",
+        "TBL-ops_alerts"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — tổng giờ nằm ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E00-05a",
+        "E08-01"
+      ],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E11-10a",
+          "title": "Viết khung ops_watchdog, chống trùng và luật job A-2 / A-3 / A-12 / A-4",
+          "discipline": "DB",
+          "description": "Khung: job_runs 実行中 → chạy từng luật → INSERT bỏ qua nếu đã có 未対応 cùng khóa → 成功 (processed_count = cảnh báo mới). A-2: job_runs 失敗 mới, slot đã qua > 10 phút không có dòng (so lịch tĩnh 13 job), 実行中 quá hạn (db_dump_offsite > 3 giờ → đánh 失敗 タイムアウト); Critical với eligibility_daily / notification_dispatch. A-3: 10:50 chưa có 成功 daily_report_build cho ngày chợ trước. A-12: db_dump_offsite 失敗. A-4: ngày 締め済 quá 24 giờ chưa có batch hợp lệ.",
+          "acceptance": [
+            "Điều kiện A-4 kéo dài 3 lượt → chỉ 1 dòng 未対応",
+            "Không có dòng audit_chain_verify 10:30 tới 10:45 → A-2 Warning",
+            "eligibility_daily 失敗 → A-2 Critical, thông báo ROLE-009 trong lượt đó",
+            "Lỗi SQL của watchdog → job_runs 失敗, lượt sau chạy lại bình thường"
+          ],
+          "spec_refs": [
+            "FN-ops-ops_watchdog",
+            "DD-F034-ops-monitoring-alerts",
+            "TBL-ops_alerts",
+            "TBL-job_runs",
+            "ADR-009"
+          ],
+          "hours": 12,
+          "hours_basis": "Khung chống trùng + 4 luật, A-2 có 3 điều kiện và so với lịch tĩnh.",
+          "priority": "must",
+          "depends_on": [
+            "E00-05a",
+            "E08-01"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E11-10b",
+          "title": "Viết luật ops_watchdog A-5 / A-6 / A-7 / A-8 / A-9",
+          "discipline": "DB",
+          "description": "A-5: dispatch 失敗 mới hoặc Critical chưa 送信済 quá due_at. A-6: audit_chain_verify 失敗 có mismatch. A-7: auth.lockout mới, > 20 拒否 / 5 phút / người, 権限 ngoài 01:00〜11:00 JST, RPT-03 / ACC-03 > 30 lần / 10 phút / người (ngưỡng là tham số, chờ OQ-24). A-8: 要照合 nhận > 2 giờ. A-9: ngày trong 30 ngày tới không có phiên bản quy tắc 承認済 / 発効, tối đa 1 lần / ngày.",
+          "acceptance": [
+            "21 lần 403 trong 5 phút + đổi vai trò 23:00 → 2 dòng A-7",
+            "Mục 要照合 2 giờ 5 phút → A-8",
+            "A-9 không sinh lần 2 trong cùng ngày JST",
+            "Ngưỡng A-7 đọc từ cấu hình, không viết cứng"
+          ],
+          "spec_refs": [
+            "FN-ops-ops_watchdog",
+            "DD-F034-ops-monitoring-alerts",
+            "TBL-audit_logs",
+            "TBL-notification_dispatches",
+            "TBL-sync_operations",
+            "TBL-rule_versions"
+          ],
+          "hours": 8,
+          "hours_basis": "5 luật truy vấn trên 4 bảng nguồn, A-7 có 4 điều kiện con.",
+          "priority": "must",
+          "depends_on": [
+            "E11-10a",
+            "E00-03a"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E11-11",
+      "title": "Viết ops_status_summary và API OPS-02 tóm tắt vận hành",
+      "discipline": "BE",
+      "description": "Hàm chỉ đọc trả 12 dòng A-1〜A-12 (A-1 / A-10 / A-11 = 外部監視), critical_open_count, khối security (khóa tài khoản, đăng nhập sai, 403 bùng phát, quản trị ngoài giờ, trạng thái chuỗi audit), exports (ngày chưa xuất > 24 giờ, batch エラー), daily_report, sync_pending_over_2h_count, rule_gap_dates. Route OPS-02 (ROLE-009 aal2) kiểm health DB / Auth / Storage song song timeout 2 giây / thành phần, DB lỗi → phần đọc DB null, body vẫn 200 + M_OPS_06; không audit.",
+      "acceptance": [
+        "DB tắt → 200, DB 異常, M_OPS_06",
+        "ROLE-005 gọi → 403 M_19; ROLE-009 chưa aal2 → 401 M_COM_06",
+        "Có Critical 未対応 → critical_open_count > 0"
+      ],
+      "spec_refs": [
+        "OPS-02",
+        "FN-ops-ops_status_summary",
+        "DD-F034-ops-monitoring-alerts",
+        "TBL-ops_alerts"
+      ],
+      "hours": 12,
+      "hours_basis": "Hàm gom 9 khối chỉ số trên nhiều bảng + route health 3 thành phần song song có timeout.",
+      "priority": "must",
+      "depends_on": [
+        "E11-10a",
+        "E00-07"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-12",
+      "title": "Dựng API OPS-03 lịch sử job và OPS-04 danh sách cảnh báo",
+      "discipline": "BE",
+      "description": "OPS-03: trạng thái mới nhất 13 job + lịch tĩnh (cùng nguồn với migration pg_cron) + lịch sử lọc job_name / khoảng ≤ 31 ngày / status, kèm is_delayed, is_rerunnable (lượt 失敗 mới nhất, slot chưa 成功, không phải job tự bù), duration_ms. OPS-04: cảnh báo lọc status / severity / alert_code / khoảng ≤ 92 ngày + open_count / critical_open_count. Chỉ ROLE-009 aal2.",
+      "acceptance": [
+        "notification_dispatch / ops_watchdog luôn is_rerunnable = false",
+        "Khoảng OPS-03 32 ngày → 400 M_COM_18",
+        "Lịch tĩnh trong API trùng với migration pg_cron (test so sánh)"
+      ],
+      "spec_refs": [
+        "OPS-03",
+        "OPS-04",
+        "DD-F034-ops-monitoring-alerts",
+        "TBL-job_runs",
+        "TBL-ops_alerts",
+        "ADR-009"
+      ],
+      "hours": 8,
+      "hours_basis": "2 route đọc, OPS-03 có 3 cờ phái sinh và lịch tĩnh dùng chung.",
+      "priority": "must",
+      "depends_on": [
+        "E00-05a",
+        "E00-07"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-13",
+      "title": "Viết ops_alert_acknowledge và API OPS-05 xác nhận cảnh báo",
+      "discipline": "BE",
+      "description": "ops_alerts FOR UPDATE → kiểm 未対応 (đã 対応済 → 409 M_OPS_03) → cập nhật đồng thời acknowledged_by / at / ack_note → audit ops.alert_ack (運用, reason = ack_note). ack_note 1〜500.",
+      "acceptance": [
+        "Xác nhận 2 lần → lần 2 409 M_OPS_03, chỉ 1 dòng audit",
+        "Thiếu ack_note → 400 M_01"
+      ],
+      "spec_refs": [
+        "OPS-05",
+        "FN-ops-ops_alert_acknowledge",
+        "TBL-ops_alerts",
+        "FN-audit-audit_append"
+      ],
+      "hours": 4,
+      "hours_basis": "1 hàm cập nhật trạng thái đơn + route mỏng.",
+      "priority": "must",
+      "depends_on": [
+        "E00-02g",
+        "E00-03a",
+        "E00-07"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-14",
+      "title": "Viết job_rerun và API OPS-06 chạy lại lượt job thất bại",
+      "discipline": "BE",
+      "description": "Advisory lock theo job_name + scheduled_for → kiểm: job tự bù → 422 M_OPS_50; slot đã 成功 → 409 M_OPS_05; không phải lượt 失敗 mới nhất / đang 実行中 → 409 M_OPS_51 → gọi hàm job qua khung ADR-009 với triggered_by (dòng job_runs mới); job dài (> 60 giây, vd daily_report_build) chỉ xếp lịch chạy ngay rồi trả 実行中; audit job.rerun. Trả 202.",
+      "acceptance": [
+        "2 ROLE-009 bấm cùng lượt → 1 lượt mới, người sau 409",
+        "Lượt mới có triggered_by = người bấm",
+        "Index unique 1 lượt 成功 / slot chặn chạy trùng"
+      ],
+      "spec_refs": [
+        "OPS-06",
+        "FN-ops-job_rerun",
+        "DD-F034-ops-monitoring-alerts",
+        "TBL-job_runs",
+        "ADR-009"
+      ],
+      "hours": 8,
+      "hours_basis": "Khóa tương tranh + 3 nhánh từ chối + 2 cách chạy (đồng bộ / xếp lịch).",
+      "priority": "must",
+      "depends_on": [
+        "E00-05a",
+        "E00-03a",
+        "E00-07"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-15",
+      "title": "Dựng màn SCR-037 運用監視",
+      "discipline": "FE",
+      "description": "Màn PC cho ROLE-009: trạng thái hệ thống, bảng A-1〜A-12, 4 tab (アラート, ジョブ, 通知送信, セキュリティ・出力), tự làm mới 60 giây.",
+      "acceptance": [
+        "Mọi sub-issue xong"
+      ],
+      "spec_refs": [
+        "SCR-037",
+        "OPS-02",
+        "OPS-03",
+        "OPS-04",
+        "OPS-05",
+        "OPS-06",
+        "NTF-06"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — tổng giờ nằm ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E11-11",
+        "E11-12"
+      ],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E11-15a",
+          "title": "Dựng khung SCR-037: trạng thái hệ thống, bảng A-1〜A-12, tab セキュリティ・出力",
+          "discipline": "FE",
+          "description": "Vùng A health + overall, nhãn làm mới M_OPS_01, tự làm mới 60 giây có thể tắt, banner M_OPS_02 khi có Critical chưa xác nhận; bảng B 12 dòng; tab G khối bảo mật / xuất / báo cáo ngày / 要照合 / thiếu quy tắc, link sang SCR-034.",
+          "acceptance": [
+            "Thành phần 異常 hiện đỏ, không chặn phần còn lại",
+            "Tắt tự làm mới thì không gọi lại API"
+          ],
+          "spec_refs": [
+            "SCR-037",
+            "OPS-02"
+          ],
+          "hours": 8,
+          "hours_basis": "3 vùng đọc từ 1 API + vòng làm mới.",
+          "priority": "must",
+          "depends_on": [
+            "E11-11",
+            "E00-12a"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E11-15b",
+          "title": "Dựng tab アラート và dialog xác nhận cảnh báo",
+          "discipline": "FE",
+          "description": "Bộ lọc trạng thái / mức / khoảng ngày (OPS-04), bảng có dòng mở rộng nội dung, dialog H nhập 対応内容 → OPS-05, toast M_OPS_07, xử lý 409 M_OPS_03.",
+          "acceptance": [
+            "Xác nhận xong dòng chuyển 対応済 và số chưa xác nhận giảm",
+            "Bỏ trống 対応内容 → không gửi"
+          ],
+          "spec_refs": [
+            "SCR-037",
+            "OPS-04",
+            "OPS-05"
+          ],
+          "hours": 8,
+          "hours_basis": "1 bảng lọc + 1 dialog ghi.",
+          "priority": "must",
+          "depends_on": [
+            "E11-15a",
+            "E11-12",
+            "E11-13"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E11-15c",
+          "title": "Dựng tab ジョブ có chạy lại và tab 通知送信",
+          "discipline": "FE",
+          "description": "Tab E: trạng thái mới nhất từng job + lịch sử lọc (OPS-03), nút 再実行 chỉ khi is_rerunnable, dialog I xác nhận M_OPS_04 → OPS-06 → M_OPS_08; tab F đọc NTF-06 lọc trạng thái / khoảng ngày.",
+          "acceptance": [
+            "Lượt không chạy lại được không có nút",
+            "Chạy lại thành công làm mới lịch sử, lượt mới hiện 手動実行者"
+          ],
+          "spec_refs": [
+            "SCR-037",
+            "OPS-03",
+            "OPS-06",
+            "NTF-06"
+          ],
+          "hours": 8,
+          "hours_basis": "2 tab bảng + 1 dialog ghi.",
+          "priority": "must",
+          "depends_on": [
+            "E11-15a",
+            "E11-12",
+            "E11-14",
+            "E08-09"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E11-16",
+      "title": "Viết hàm job db_dump_offsite và endpoint JOB-06 kích hoạt bản sao DR",
+      "discipline": "BE",
+      "description": "Hàm job 10:45 JST tạo job_runs 実行中 + pg_net JOB-06; endpoint kiểm secret / lượt (409 M_JOB_50), gọi webhook runner DR và trả 202 実行中; webhook lỗi (≠ 2xx) → job_run_complete 失敗 ngay (A-12). Kết quả cuối do runner callback job_run_complete; quá 3 giờ do watchdog đánh タイムアウト.",
+      "acceptance": [
+        "Webhook runner trả 500 → job_runs 失敗 trong cùng request",
+        "Giao lại lượt đã kết thúc → 409 M_JOB_50"
+      ],
+      "spec_refs": [
+        "JOB-06",
+        "DD-F034-ops-monitoring-alerts",
+        "FN-ops-job_run_complete",
+        "ADR-002",
+        "ADR-009"
+      ],
+      "hours": 8,
+      "hours_basis": "Hàm job + endpoint JOB-06 + gọi runner pg_dump ngoài DB và đồng bộ Storage (chỉnh sau đối chiếu giờ/SWP)",
+      "priority": "should",
+      "depends_on": [
+        "E00-05a",
+        "E00-05b"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-17",
+      "title": "Dựng runner DR chạy pg_dump và đồng bộ Storage sang bản sao",
+      "discipline": "INFRA",
+      "description": "Runner (GitHub Actions hoặc container vùng DR — chờ chốt ADR-002 / OQ-04) nhận webhook, chạy pg_dump qua kết nối trực tiếp, mã hóa, lưu vùng DR, đồng bộ các bucket Storage, rồi callback job_run_complete với dump_path, dump_size_bytes, dump_sha256, storage_synced. Secret riêng, không dùng service key của app.",
+      "acceptance": [
+        "1 lượt thành công ghi detail đủ 4 trường",
+        "Lỗi giữa chừng → callback 失敗 có error_message"
+      ],
+      "spec_refs": [
+        "JOB-06",
+        "ADR-002",
+        "DD-F034-ops-monitoring-alerts"
+      ],
+      "hours": 12,
+      "hours_basis": "Hạ tầng mới ngoài app: dump + đồng bộ Storage + callback có xác thực.",
+      "priority": "should",
+      "depends_on": [
+        "E11-16",
+        "E00-14"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-18",
+      "title": "Cấu hình giám sát uptime ngoài gọi OPS-01 và log drain lỗi",
+      "discipline": "INFRA",
+      "description": "Dịch vụ giám sát ngoài gọi OPS-01 mỗi 1 phút trong 02:00〜10:00 JST, 2 lần lỗi liên tiếp → Critical cho ROLE-009 + Infra (A-1, nguồn đo uptime NFR-001); log drain cho ERROR / FATAL của category job, accounting, notification, audit, ops theo logs-convention §2.2; kênh nhận A-10 / A-11 từ metrics Supabase / Vercel.",
+      "acceptance": [
+        "Tắt DB staging 2 phút → nhận cảnh báo A-1",
+        "Log ERROR category job xuất hiện ở đích log drain"
+      ],
+      "spec_refs": [
+        "OPS-01",
+        "DD-F034-ops-monitoring-alerts",
+        "DD-LOGS",
+        "ADR-002"
+      ],
+      "hours": 4,
+      "hours_basis": "Cấu hình dịch vụ có sẵn, không viết code ứng dụng.",
+      "priority": "should",
+      "depends_on": [
+        "E11-09",
+        "E00-14",
+        "E00-15"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-19",
+      "title": "Dựng API ATT-03 tải tệp đính kèm theo quyền đối tượng cha",
+      "discipline": "BE",
+      "description": "Resolver quyền theo entity cha (lots, lot_inspections, deliveries, delivery_exceptions, eligibility_*, correction_requests, disputes / dispute_notes, payment_import_batches, accounting_export_batches, migration_runs) dùng lại điều kiện của API đọc cha kèm phạm vi (vd ROLE-003 / 005 chỉ phiếu mình lập); không đủ quyền → 404 M_15 (không tiết lộ); ROLE-007 / 008 / 012 → 403; コールド → 409 M_ATT_01, 復元中 → 409 M_ATT_82; ROLE-005 / 009 mở được tệp đã từng khôi phục; audit_append attachment.download trước khi cấp signed URL 300 giây.",
+      "acceptance": [
+        "ROLE-003 mở tệp phiếu người khác → 404 M_15",
+        "Mở 1 tệp 2 lần → 2 dòng attachment.download",
+        "Ghi audit lỗi → 500 M_17, không cấp URL"
+      ],
+      "spec_refs": [
+        "ATT-03",
+        "DD-F035-attachment-upload-archive-restore",
+        "TBL-attachments",
+        "FN-audit-audit_append"
+      ],
+      "hours": 12,
+      "hours_basis": "Resolver quyền cho ~10 loại cha với phạm vi theo vai trò + 2 trạng thái lưu trữ + audit.",
+      "priority": "must",
+      "depends_on": [
+        "E00-04c",
+        "E00-03a",
+        "E00-07"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-20",
+      "title": "Viết job attachment_temp_purge và endpoint JOB-04 dọn vùng tạm",
+      "discipline": "BE",
+      "description": "Hàm job mỗi giờ phút 15 chọn ≤ 1,000 object uploads/ quá 24 giờ chưa có attachments.storage_path tương ứng, gọi JOB-04; endpoint kiểm lại từng path ngay trước khi xóa (tránh xóa tệp vừa được gắn), xóa qua Storage API lô 100, kết thúc bằng job_run_complete (candidates, deleted, kept_referenced). Chưa có FN riêng — làm theo JOB-04 / DD-F035 §4.",
+      "acceptance": [
+        "Tệp được gắn giữa lúc chọn và xóa → không bị xóa",
+        "Không xóa trực tiếp storage.objects bằng SQL",
+        "Lỗi Storage → job_runs 失敗"
+      ],
+      "spec_refs": [
+        "JOB-04",
+        "DD-F035-attachment-upload-archive-restore",
+        "FN-ops-job_run_complete",
+        "TBL-attachments"
+      ],
+      "hours": 8,
+      "hours_basis": "Hàm chọn + endpoint có kiểm lại chống race và xóa theo lô.",
+      "priority": "must",
+      "depends_on": [
+        "E00-05a",
+        "E00-05b",
+        "E00-04a"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-21",
+      "title": "Viết attachment_cold_archive và attachment_archive_record_result",
+      "discipline": "DB",
+      "description": "Phần A (job Chủ nhật 11:00 JST): chọn tệp 証憑3年 オンライン có online_until < hôm nay JST và tệp đã khôi phục có restored_at + 30 ngày < hôm nay, bỏ 文書7年 và 復元中, chia request ≤ 200 item gọi JOB-02. Callback từng tệp: thành công → コールド, storage_bucket lạnh, archived_at; thất bại → giữ オンライン, error_count + 1.",
+      "acceptance": [
+        "Ảnh online_until hôm qua được chọn; tệp 文書7年 cùng tuổi không được chọn",
+        "Callback false không đổi trạng thái tệp",
+        "Callback lặp lại cho tệp đã コールド là idempotent"
+      ],
+      "spec_refs": [
+        "FN-attachment-attachment_cold_archive",
+        "FN-attachment-attachment_archive_record_result",
+        "TBL-attachments",
+        "DD-F035-attachment-upload-archive-restore"
+      ],
+      "hours": 8,
+      "hours_basis": "2 hàm: chọn có 2 tập điều kiện + chia lô, callback 2 nhánh idempotent.",
+      "priority": "must",
+      "depends_on": [
+        "E00-04c",
+        "E00-05a"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-22",
+      "title": "Dựng endpoint JOB-02 chuyển tệp sang bucket lạnh",
+      "discipline": "BE",
+      "description": "Từng item theo thứ tự an toàn: copy sang bucket lạnh cùng storage_path → kiểm size_bytes + SHA-256 → callback attachment_archive_record_result → sau callback mới xóa object online (lỗi xóa → để thừa, tuần sau dọn). Kiểm secret / lượt (409 M_JOB_50); lỗi toàn lượt → 失敗.",
+      "acceptance": [
+        "Ép lỗi kiểm hash 1 item → item giữ オンライン, các item khác vẫn chuyển",
+        "Object online chỉ bị xóa sau khi callback thành công"
+      ],
+      "spec_refs": [
+        "JOB-02",
+        "DD-F035-attachment-upload-archive-restore",
+        "FN-attachment-attachment_archive_record_result"
+      ],
+      "hours": 8,
+      "hours_basis": "4 bước tuần tự / item có hash + xử lý lỗi từng phần.",
+      "priority": "must",
+      "depends_on": [
+        "E11-21",
+        "E00-05b",
+        "E00-14"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-23",
+      "title": "Viết attachment_restore và API ATT-04 yêu cầu khôi phục",
+      "discipline": "BE",
+      "description": "Dòng attachments FOR UPDATE → phải コールド (khác → 409 M_ATT_04) → 復元中, restore_requested_by / at, restored_at NULL → xếp pg_net JOB-03 (phát sau commit) → audit attachment.restore_request (reason = lý do). restore_due_date = 業務日 thứ 2 sau ngày yêu cầu (đếm is_holiday = false, lịch thiếu → +2 ngày lịch) đặt trong 1 hàm để đổi nhanh theo OQ-21. Chỉ ROLE-009 aal2, lý do 1〜500.",
+      "acceptance": [
+        "Yêu cầu thứ Sáu, thứ Bảy là 休市日 → hạn = 業務日 thứ 2 sau đó",
+        "Tệp đang 復元中 → 409 M_ATT_04",
+        "Thiếu lý do → 400 M_01"
+      ],
+      "spec_refs": [
+        "ATT-04",
+        "FN-attachment-attachment_restore",
+        "DD-F035-attachment-upload-archive-restore",
+        "TBL-attachments",
+        "TBL-business_days"
+      ],
+      "hours": 8,
+      "hours_basis": "1 hàm trạng thái + hạn theo lịch chợ + pg_net sau commit + route.",
+      "priority": "must",
+      "depends_on": [
+        "E00-04c",
+        "E00-10",
+        "E00-05a",
+        "E00-03a"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-24",
+      "title": "Dựng endpoint JOB-03 khôi phục tệp và attachment_restore_record_result",
+      "discipline": "BE",
+      "description": "Copy từ bucket lạnh về attachments cùng storage_path, kiểm SHA-256, callback → オンライン, storage_bucket attachments, restored_at; bản lạnh giữ nguyên. Lỗi → giữ 復元中, tự thử lại 3 lần (1 / 5 / 15 phút). Không tạo job_runs (yêu cầu người dùng).",
+      "acceptance": [
+        "Khôi phục xong → ATT-03 mở được tệp",
+        "Lỗi 3 lần → vẫn 復元中, hiện quá hạn ở ATT-05 khi qua restore_due_date"
+      ],
+      "spec_refs": [
+        "JOB-03",
+        "FN-attachment-attachment_restore_record_result",
+        "DD-F035-attachment-upload-archive-restore"
+      ],
+      "hours": 8,
+      "hours_basis": "Copy + hash + callback + lịch thử lại 3 mức.",
+      "priority": "must",
+      "depends_on": [
+        "E11-23",
+        "E00-05b"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-25",
+      "title": "Dựng API ATT-05 trạng thái khôi phục và ATT-06 tìm tệp",
+      "discipline": "BE",
+      "description": "ATT-05 (ROLE-005 xem, ROLE-009): yêu cầu gần nhất / tệp lọc storage_status, khoảng ngày; restore_due_date, is_overdue, recold_scheduled_on, meta.overdue_count (M_ATT_05). ATT-06 (ROLE-009): tìm metadata theo entity + entity_id hoặc file_name (≥ 1, thiếu → M_01), trạng thái lưu trữ; ≤ 100 dòng, vượt → meta.has_more M_COM_20.",
+      "acceptance": [
+        "Yêu cầu quá hạn chưa xong → is_overdue true và đếm vào overdue_count",
+        "ATT-06 không trả URL tải, chỉ metadata"
+      ],
+      "spec_refs": [
+        "ATT-05",
+        "ATT-06",
+        "DD-F035-attachment-upload-archive-restore",
+        "TBL-attachments"
+      ],
+      "hours": 8,
+      "hours_basis": "2 route đọc, ATT-05 có 3 trường phái sinh theo lịch chợ.",
+      "priority": "must",
+      "depends_on": [
+        "E11-23",
+        "E00-07"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-26",
+      "title": "Dựng tab 添付復元 trên SCR-038",
+      "discipline": "FE",
+      "description": "Vùng I tìm tệp (ATT-06) với nút 復元依頼 cho tệp コールド, dialog K lý do + xác nhận M_ATT_02 → ATT-04 → M_ATT_03; bảng J trạng thái yêu cầu (ATT-05), banner quá hạn J-11, nút 表示 mở tệp đã khôi phục (ATT-03). ROLE-005 chỉ xem kết quả, không có nút.",
+      "acceptance": [
+        "ROLE-005 không thấy vùng I và nút 復元依頼",
+        "Tệp không phải コールド không có nút 復元依頼"
+      ],
+      "spec_refs": [
+        "SCR-038",
+        "ATT-03",
+        "ATT-04",
+        "ATT-05",
+        "ATT-06"
+      ],
+      "hours": 8,
+      "hours_basis": "2 bảng + 1 dialog, phân quyền 2 vai trò.",
+      "priority": "must",
+      "depends_on": [
+        "E11-25",
+        "E11-23",
+        "E11-19",
+        "E00-12c"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-27",
+      "title": "Viết bộ test vector vòng đời tệp đính kèm",
+      "discipline": "QA",
+      "description": "Theo state-machines §14 và viewpoint 6〜16 của DD-F035: dọn tạm an toàn, quyền tải xuống, audit tải, chuyển lạnh, copy lỗi, mở tệp lạnh / đang khôi phục, khôi phục qua ngày nghỉ, khôi phục trùng, chuyển lạnh lại sau 30 ngày; Storage giả lập trong test.",
+      "acceptance": [
+        "Mọi chuyển trạng thái オンライン → コールド → 復元中 → オンライン có test",
+        "Chạy trong CI không cần Storage thật"
+      ],
+      "spec_refs": [
+        "DD-F035-attachment-upload-archive-restore",
+        "TBL-attachments",
+        "FN-attachment-attachment_cold_archive",
+        "FN-attachment-attachment_restore"
+      ],
+      "hours": 8,
+      "hours_basis": "11 kịch bản trên 1 máy trạng thái, cần stub Storage.",
+      "priority": "must",
+      "depends_on": [
+        "E11-20",
+        "E11-22",
+        "E11-24",
+        "E00-16"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-28",
+      "title": "Viết hàm reconcile_migration_run đối chiếu lượt migration",
+      "discipline": "DB",
+      "description": "Nhận run_id + source profile (4 cặp nguồn × bảng đích): kiểm lượt (đã 合格 / 不合格 / ロールバック済 → M_MIG_03; 照合待ち đã có dòng được xác nhận → M_MIG_81; profile thiếu cặp / count âm → M_MIG_82); tính loaded_count theo id map hoặc migration_run_id, loaded_amount, rejected_count theo source_name; result 一致 / 許容 (chênh giải thích hết bằng dòng loại, note tự sinh) / 不一致; upsert theo (run_id, source_name, target_table); run → 照合待ち, finished_at; audit migration_run.reconcile.",
+      "acceptance": [
+        "48,210 / 48,195 / 15 DUP_KEY, chênh ¥429,200 = tổng dòng loại → 許容 + note tự sinh",
+        "Cùng số nhưng rejected_amount 0 → 不一致",
+        "Thiếu cặp 引渡し集計ファイル → M_MIG_82, lượt vẫn 実行中"
+      ],
+      "spec_refs": [
+        "FN-migration-reconcile_migration_run",
+        "DD-F036-migration-rehearsal-reconcile",
+        "TBL-migration_runs",
+        "TBL-migration_reconciliations",
+        "TBL-migration_id_maps",
+        "TBL-migration_row_errors"
+      ],
+      "hours": 8,
+      "hours_basis": "4 cặp đối chiếu, 3 mức kết quả, 3 guard trạng thái.",
+      "priority": "must",
+      "depends_on": [
+        "E00-02h",
+        "E00-03a"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-29",
+      "title": "Viết migration_row_errors_handle và API MIG-04 phân loại dòng lỗi",
+      "discipline": "BE",
+      "description": "Lượt FOR SHARE (chặn ký giữa chừng) → dòng lỗi FOR UPDATE → cập nhật handling (除外 / 修正済 / 手動登録), handled_by, handled_at cho 1〜100 id theo kiểu tất cả hoặc không → 1 dòng audit migration.row_error_handle (reason = lý do). Lượt không 照合待ち → 422 M_MIG_03; có id ngoài lượt → 404 M_15. Chỉ ROLE-009 aal2.",
+      "acceptance": [
+        "100 id có 1 id thuộc lượt khác → 404, không dòng nào đổi",
+        "Trả updated_count và unhandled_error_count mới"
+      ],
+      "spec_refs": [
+        "MIG-04",
+        "FN-migration-migration_row_errors_handle",
+        "TBL-migration_row_errors",
+        "DD-F036-migration-rehearsal-reconcile"
+      ],
+      "hours": 8,
+      "hours_basis": "Cập nhật hàng loạt nguyên tử + khóa phối hợp với MIG-03.",
+      "priority": "must",
+      "depends_on": [
+        "E11-28",
+        "E00-07"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-30",
+      "title": "Viết migration_review và API MIG-03 xác nhận đối chiếu / ký go-no-go",
+      "discipline": "BE",
+      "description": "migration_runs FOR UPDATE → kiểm 照合待ち. Kiểu reconciliation (ROLE-005): accept_mismatch chỉ khi 不一致 → 許容 (note bắt buộc), ghi checked_by / at. Kiểu run (ROLE-009): 合格 cần 0 不一致 + 0 dòng lỗi chưa handling + 0 dòng chưa xác nhận (M_MIG_01 / M_MIG_04); 不合格 không cần điều kiện; ghi signed_off_* + decision_note, sau đó bất biến. Audit migration.reconcile_check / migration.sign_off.",
+      "acceptance": [
+        "ROLE-009 gọi kiểu reconciliation / ROLE-005 gọi kiểu run → 403 M_19",
+        "Còn 1 dòng chưa xác nhận → 422 M_MIG_04",
+        "MIG-04 và MIG-03 song song → MIG-03 chờ khóa, điều kiện kiểm sau khi MIG-04 commit"
+      ],
+      "spec_refs": [
+        "MIG-03",
+        "FN-migration-migration_review",
+        "TBL-migration_runs",
+        "TBL-migration_reconciliations",
+        "DD-F036-migration-rehearsal-reconcile"
+      ],
+      "hours": 8,
+      "hours_basis": "2 kiểu ghi theo vai trò + 3 điều kiện ký + khóa tương tranh.",
+      "priority": "must",
+      "depends_on": [
+        "E11-28",
+        "E00-07"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-31",
+      "title": "Dựng API MIG-01 danh sách lượt và MIG-02 kết quả đối chiếu",
+      "discipline": "BE",
+      "description": "MIG-01: lượt + mismatch_count, unchecked_count, error_count, unhandled_error_count, meta.environment (production chỉ lượt 本番, M_MIG_05). MIG-02: reconciliations + count_diff / amount_diff phái sinh, dòng lỗi lọc source_name / error_code / handling trang 100 (raw_data nguyên văn), criteria {…, can_pass}, tài liệu đính kèm. Đọc không audit; chỉ ROLE-005 / 009.",
+      "acceptance": [
+        "Lượt 実行中 → danh sách rỗng",
+        "can_pass = true chỉ khi cả 3 bộ đếm = 0"
+      ],
+      "spec_refs": [
+        "MIG-01",
+        "MIG-02",
+        "DD-F036-migration-rehearsal-reconcile",
+        "TBL-migration_runs",
+        "TBL-migration_reconciliations",
+        "TBL-migration_row_errors"
+      ],
+      "hours": 8,
+      "hours_basis": "2 route đọc có 7 chỉ số phái sinh và lọc dòng lỗi.",
+      "priority": "must",
+      "depends_on": [
+        "E11-28",
+        "E00-07"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E11-32",
+      "title": "Dựng tab 移行照合 trên SCR-038",
+      "discipline": "FE",
+      "description": "Tab xem lượt migration, đối chiếu, dòng lỗi và go / no-go cho ROLE-005 / ROLE-009.",
+      "acceptance": [
+        "Mọi sub-issue xong"
+      ],
+      "spec_refs": [
+        "SCR-038",
+        "MIG-01",
+        "MIG-02",
+        "MIG-03",
+        "MIG-04"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — tổng giờ nằm ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E11-31"
+      ],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E11-32a",
+          "title": "Dựng bảng lượt chạy, bảng đối chiếu và dialog 照合確認 (ROLE-005)",
+          "discipline": "FE",
+          "description": "Banner môi trường M_MIG_05, bảng B lượt (MIG-01), bảng C đối chiếu có chênh số / tiền và kết quả, nút 確認 mở dialog F (chấp nhận chênh → 許容 bắt buộc 備考) → MIG-03 kiểu reconciliation.",
+          "acceptance": [
+            "ROLE-009 không thấy nút 確認",
+            "Bật 許容 không nhập 備考 → không gửi, hiện M_01"
+          ],
+          "spec_refs": [
+            "SCR-038",
+            "MIG-01",
+            "MIG-02",
+            "MIG-03"
+          ],
+          "hours": 8,
+          "hours_basis": "2 bảng + 1 dialog ghi có phân quyền.",
+          "priority": "must",
+          "depends_on": [
+            "E11-31",
+            "E11-30",
+            "E00-12c"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E11-32b",
+          "title": "Dựng bảng dòng lỗi, dialog phân loại và khối 判定 (ROLE-009)",
+          "discipline": "FE",
+          "description": "Bảng D lọc nguồn / mã lỗi / trạng thái, chọn nhiều ≤ 100 dòng, dialog H phân loại + メモ → MIG-04 (M_MIG_07); khối E điều kiện ký, nút 合格 vô hiệu khi can_pass false, dialog G ghi 判定メモ → MIG-03 kiểu run, 不合格 hiện banner M_MIG_06; tài liệu tải qua ATT-03.",
+          "acceptance": [
+            "Chọn 101 dòng → không cho gửi",
+            "Sau khi ký mọi nút ghi bị ẩn"
+          ],
+          "spec_refs": [
+            "SCR-038",
+            "MIG-02",
+            "MIG-03",
+            "MIG-04",
+            "ATT-03"
+          ],
+          "hours": 8,
+          "hours_basis": "1 bảng chọn nhiều + 2 dialog + khối điều kiện.",
+          "priority": "must",
+          "depends_on": [
+            "E11-32a",
+            "E11-29",
+            "E11-30"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E11-33",
+      "title": "Viết công cụ migration batch nạp 3 nguồn dữ liệu cũ",
+      "discipline": "BE",
+      "description": "CLI chạy ngoài API (QA-010) bằng kết nối service role cho từng lượt リハーサル (staging) / 本番 (production): tạo migration_runs, profiling, nạp theo thứ tự FK, ghi id map / dòng lỗi, gọi reconcile_migration_run; script rollback. Định dạng file nguồn chờ QA-010 (hạn 2026-12-15) — các loader viết theo interface đọc có thể thay.",
+      "acceptance": [
+        "Mọi sub-issue xong"
+      ],
+      "spec_refs": [
+        "DD-F036-migration-rehearsal-reconcile",
+        "DB-INITIAL-DATA",
+        "FN-migration-reconcile_migration_run"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — tổng giờ nằm ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E11-28"
+      ],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E11-33a",
+          "title": "Viết khung CLI migration: tạo lượt, đọc file nguồn, profiling",
+          "discipline": "BE",
+          "description": "Lệnh run --type リハーサル|本番 --from --to: INSERT migration_runs 実行中 (run_no, data_from_date, data_to_date, executed_by); đọc xlsx / csv qua interface reader; profiling source_count, source_amount theo tháng × người, rejected_amount; gọi reconcile_migration_run ở cuối; chặn chạy 本番 khi đã có lượt 本番 合格; log category migration, không log dữ liệu cá nhân.",
+          "acceptance": [
+            "Chạy trên file mẫu sinh source profile đủ 4 cặp",
+            "Lỗi giữa chừng để lượt ở 実行中, chạy lại tạo lượt mới"
+          ],
+          "spec_refs": [
+            "DD-F036-migration-rehearsal-reconcile",
+            "DB-INITIAL-DATA",
+            "TBL-migration_runs"
+          ],
+          "hours": 8,
+          "hours_basis": "Khung CLI + reader trừu tượng + profiling 3 nguồn.",
+          "priority": "must",
+          "depends_on": [
+            "E11-28",
+            "E00-02h"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E11-33b",
+          "title": "Viết loader 参加者一覧 → participants, eligibility_periods, histories",
+          "discipline": "BE",
+          "description": "kind theo cột loại, basis suy từ kind; chuẩn hóa các biến thể mã về 1 code và ghi mọi source_key vào migration_id_maps; kỳ chồng / thiếu ngày → OUT_OF_RANGE; status tính lại theo ngày go-live (valid_to < go-live → 失効); 1 dòng eligibility_status_histories / kỳ với reason 移行.",
+          "acceptance": [
+            "2 mã biến thể của cùng người → 1 participant, 2 dòng id map",
+            "Kỳ chồng nhau → dòng OUT_OF_RANGE, không nạp kỳ đó"
+          ],
+          "spec_refs": [
+            "DB-INITIAL-DATA",
+            "DD-F036-migration-rehearsal-reconcile",
+            "TBL-participants",
+            "TBL-eligibility_periods",
+            "TBL-eligibility_status_histories",
+            "TBL-migration_id_maps",
+            "ADR-010"
+          ],
+          "hours": 12,
+          "hours_basis": "Chuẩn hóa mã nhiều nguồn + kiểm kỳ hiệu lực + tính lại trạng thái.",
+          "priority": "must",
+          "depends_on": [
+            "E11-33a",
+            "E00-02a",
+            "E00-02b"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E11-33c",
+          "title": "Viết loader 照合用スプレッドシート và 引渡し集計ファイル → bảng legacy",
+          "discipline": "BE",
+          "description": "Map người tham gia qua id map (không map được → CODE_MISMATCH); dòng gần trùng cùng ngày + mã giao dịch + số tiền → giữ 1, còn lại DUP_KEY; thiếu ngày / tiền → MISSING_REQUIRED; remaining_qty âm → INVALID_VALUE; ghi legacy_settlement_rows / legacy_delivery_rows có migration_run_id, raw_data dòng lỗi nguyên văn.",
+          "acceptance": [
+            "Lô trùng gần giống cùng 業務日 → 1 dòng nạp + dòng DUP_KEY",
+            "Nạp 400,000 dòng theo lô, không giữ hết trong bộ nhớ"
+          ],
+          "spec_refs": [
+            "DB-INITIAL-DATA",
+            "DD-F036-migration-rehearsal-reconcile",
+            "TBL-legacy_settlement_rows",
+            "TBL-legacy_delivery_rows",
+            "TBL-migration_row_errors"
+          ],
+          "hours": 12,
+          "hours_basis": "2 nguồn khối lượng lớn, 4 mã lỗi, phát hiện trùng gần giống.",
+          "priority": "must",
+          "depends_on": [
+            "E11-33b"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E11-33d",
+          "title": "Viết script rollback lượt migration theo id map",
+          "discipline": "BE",
+          "description": "Chỉ cho lượt 本番 不合格 trước go-live: xóa theo migration_id_maps thứ tự FK ngược (legacy_delivery_rows → legacy_settlement_rows → eligibility_status_histories → eligibility_periods → participants) trong transaction, đặt run ロールバック済 và ghi audit 運用; từ chối khi đã có dữ liệu nghiệp vụ tham chiếu participants (sau go-live).",
+          "acceptance": [
+            "Sau rollback không còn dòng đích nào của lượt",
+            "Lượt 合格 hoặc đã go-live → từ chối, không xóa gì"
+          ],
+          "spec_refs": [
+            "DB-INITIAL-DATA",
+            "DD-F036-migration-rehearsal-reconcile",
+            "TBL-migration_id_maps",
+            "TBL-migration_runs"
+          ],
+          "hours": 8,
+          "hours_basis": "Xóa 5 bảng theo thứ tự FK + 2 điều kiện chặn.",
+          "priority": "must",
+          "depends_on": [
+            "E11-33b",
+            "E11-33c"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E11-34",
+      "title": "Viết bộ test vector migration với dữ liệu bẩn mẫu",
+      "discipline": "QA",
+      "description": "Bộ file nguồn mẫu (không dữ liệu thật) chứa lô trùng gần giống, trường bắt buộc trống, mã lệch giữa nguồn, kỳ chồng; chạy công cụ end-to-end trên DB local rồi kiểm 15 viewpoint DD-F036: 一致 / 許容 / 不一致, profile thiếu, đối chiếu lại sau xác nhận, phân quyền theo kiểu ghi, ký thiếu điều kiện, phân loại hàng loạt, không đổi sau ký, rollback.",
+      "acceptance": [
+        "15 viewpoint có test tự động",
+        "Bộ file mẫu nằm trong repo, không chứa tên người thật"
+      ],
+      "spec_refs": [
+        "DD-F036-migration-rehearsal-reconcile",
+        "FN-migration-reconcile_migration_run",
+        "FN-migration-migration_review",
+        "FN-migration-migration_row_errors_handle"
+      ],
+      "hours": 12,
+      "hours_basis": "Dựng dữ liệu bẩn 3 nguồn + 15 kịch bản qua cả công cụ và API.",
+      "priority": "must",
+      "depends_on": [
+        "E11-29",
+        "E11-30",
+        "E11-33c",
+        "E11-33d"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    }
+  ],
+  "spec_not_issued": [
+    {
+      "spec": "Đảo lần giao replay muộn hơn khi xung đột (取消 同期競合, DD-F033 §3) trong record_delivery",
+      "reason": "Thuộc hàm DLV-03 của epic giao hàng (F-016); E11-08 chỉ test tích hợp."
+    },
+    {
+      "spec": "Gọi sync_apply_operation trong create_lot (LOT-02) và màn SCR-009 / SCR-019 bản online",
+      "reason": "create_lot ở E03-02, SCR-009 ở E03-04, SCR-019 thuộc epic giao hàng; E11-06d chỉ gắn hàng đợi."
+    },
+    {
+      "spec": "Tải lên ATT-01 / ATT-02, attachment_register, component tải tệp",
+      "reason": "Đã ở E00-04."
+    },
+    {
+      "spec": "Event type thông báo cho xung đột đồng bộ và cảnh báo ops_alert trong notification_settings",
+      "reason": "Seed / CHECK thuộc E08-02 (xem spec_gaps)."
+    },
+    {
+      "spec": "Chạy lượt リハーサル D−7 và lượt 本番 D−1, đóng băng dữ liệu cũ, go-live D 02:00 (initial-data §3.4)",
+      "reason": "Giai đoạn cutover, ngoài lập trình + unit test; E11 chỉ cung cấp công cụ và màn."
+    },
+    {
+      "spec": "Đối chiếu mẫu ≥ 30 người tham gia / 3 ngày cao điểm với bảng tính gốc (§3.2 bước 5)",
+      "reason": "Việc nghiệp vụ của ROLE-005 trong giai đoạn migration."
+    },
+    {
+      "spec": "Diễn tập cảnh báo NFR-014, đo uptime NFR-001, diễn tập restore DR",
+      "reason": "Thuộc ST / vận hành."
+    },
+    {
+      "spec": "Giám sát A-10 (disk) / A-11 (p95) bằng metrics Supabase / Vercel",
+      "reason": "Không có dữ liệu trong DB; chỉ cấu hình kênh nhận ở E11-18."
+    },
+    {
+      "spec": "Danh sách giao dịch cũ còn phải giao lúc cutover cho ROLE-004 (legacy_delivery_rows remaining_qty > 0)",
+      "reason": "Spec không có màn / API riêng; phụ thuộc OQ-12."
+    }
+  ],
+  "spec_gaps": [
+    {
+      "spec": "FN-ops-ops_watchdog A-9 ↔ DD-F034 §2 / SCR-037 B-6",
+      "gap": "FN gửi A-9 cho ROLE-009, DD và màn ghi người nhận là ROLE-007, ROLE-008.",
+      "proposal": "sửa thiết kế",
+      "note": "Đề xuất theo DD (người soạn / duyệt quy tắc mới xử lý được); E11-10b đọc người nhận từ notification_settings nên đổi không cần code."
+    },
+    {
+      "spec": "FN-sync-sync_resolve mục cuối ↔ TBL-sync_operations CHECK sync_operations_applied_check",
+      "gap": "CHECK hiện cấm dòng 照合済 có result_entity_id, trong khi 再登録 của SYNC-02 cần lưu id bản ghi thay thế.",
+      "proposal": "sửa thiết kế",
+      "note": "E11-03 kèm migration nới CHECK thành chiều 適用済 ⇒ có result_entity_id; cập nhật TBL spec."
+    },
+    {
+      "spec": "DD-F007 §1.1 / DD-F016 §2.1 ↔ FN-lot-create_lot / FN-delivery-record_delivery",
+      "gap": "DD nói route gọi sync_apply_operation bọc hàm nghiệp vụ; FN nói hàm nghiệp vụ gọi sync_apply_operation ở bước đầu (đã nêu ở E03).",
+      "proposal": "sửa thiết kế",
+      "note": "E11-01 theo FN (1 rpc / route), thống nhất với E03-02; sửa DD."
+    },
+    {
+      "spec": "ADR-009 job sync_operations_purge, attachment_temp_purge ↔ FN-LIST",
+      "gap": "2 job có lịch nhưng không có function spec.",
+      "proposal": "giả định",
+      "note": "E11-05 theo ADR-009 + DD-F033 §6; E11-20 theo JOB-04 + DD-F035 §4."
+    },
+    {
+      "spec": "DD-F035 §6.3 ↔ FN-ops-ops_watchdog / nfr-design §2",
+      "gap": "DD nói yêu cầu khôi phục quá hạn → ops_watchdog cảnh báo, nhưng bảng luật A-1〜A-12 không có luật nào cho việc này.",
+      "proposal": "sửa thiết kế",
+      "note": "Đề xuất thêm luật vào A-2 (Warning) hoặc bỏ câu trong DD; hiện chỉ có banner M_ATT_05 ở ATT-05 / SCR-038."
+    },
+    {
+      "spec": "DD-F033 §3.4 ↔ TBL-notification_settings CHECK",
+      "gap": "Thông báo cho ROLE-004 / ROLE-005 khi lần giao bị đảo do xung đột đồng bộ chưa có event type trong CHECK.",
+      "proposal": "sửa thiết kế",
+      "note": "Thêm event type + seed ở E08-02, hoặc chỉ hiển thị M_SYNC_11 trên màn."
+    },
+    {
+      "spec": "ADR-002 / DD-F034 §6 (runner DR) ↔ OQ-04",
+      "gap": "Runner pg_dump (GitHub Actions hay container vùng DR) và việc khách chấp nhận RPO 1 ngày chưa chốt.",
+      "proposal": "để mở",
+      "note": "E11-16 / E11-17 để should; làm sau khi OQ-04 có trả lời (hạn 2026-12-15)."
+    },
+    {
+      "spec": "DD-F035 §5.2 bucket lạnh ↔ ADR-002 / E00-14",
+      "gap": "Tên và loại lưu trữ lạnh chưa chốt (Supabase Storage không có tầng lạnh riêng); hạ tầng E00 đã tạo bucket cold-archive.",
+      "proposal": "giả định",
+      "note": "E11-21 / E11-22 dùng bucket cold-archive cùng project, cấu hình qua biến môi trường để đổi sang lưu trữ ngoài."
+    },
+    {
+      "spec": "OQ-21 (営業日 của hạn khôi phục)",
+      "gap": "Hạn 2 営業日 tính theo lịch chợ hay ngày làm việc văn phòng chưa được khách xác nhận.",
+      "proposal": "để mở",
+      "note": "E11-23 đặt cách tính trong 1 hàm."
+    },
+    {
+      "spec": "DD-F036 §5 / initial-data §3.5 ↔ FN-LIST",
+      "gap": "Không có hàm / API nào đặt migration_runs = ロールバック済; tài liệu chỉ nói công cụ xóa dữ liệu.",
+      "proposal": "giả định",
+      "note": "E11-33d cập nhật trạng thái + audit trực tiếp trong script; đề xuất bổ sung FN migration_rollback_record."
+    },
+    {
+      "spec": "DD-F036 §1.6 (tài liệu inventory / biên bản → attachments entity migration_runs) ↔ ATT-02",
+      "gap": "ATT-02 chế độ B chỉ nhận lots, lot_inspections, delivery_exceptions; không có API tải tài liệu migration lên.",
+      "proposal": "issue làm rõ",
+      "note": "Tạm cho CLI E11-33a tải tài liệu thẳng Storage + INSERT attachments; hoặc mở rộng ATT-02 / MIG API."
+    },
+    {
+      "spec": "initial-data §3.3 (Σ delivered_qty theo tháng) ↔ TBL-migration_reconciliations",
+      "gap": "Chỉ số bắt buộc của 引渡し集計ファイル không có cột lưu, DD tạm ghi vào note.",
+      "proposal": "sửa thiết kế",
+      "note": "Đề xuất thêm cột source_qty / loaded_qty; E11-28 tạm ghi note."
+    },
+    {
+      "spec": "QA-010 (định dạng file Phụ lục C, hạn 2026-12-15)",
+      "gap": "Cột / định dạng 3 file nguồn chưa có nên loader E11-33b / 33c chưa thể chốt mapping.",
+      "proposal": "để mở",
+      "note": "Viết reader theo interface, dùng file mẫu tự dựng; chỉnh mapping khi có Phụ lục C."
+    },
+    {
+      "spec": "OPS-03 (13 job, ADR-009 v1.1) ↔ SCR-037 tab ジョブ (12 job) và state-machines §9 / §14 (giờ job khác ADR-009)",
+      "gap": "Số job và giờ chạy lệch giữa tài liệu.",
+      "proposal": "sửa thiết kế",
+      "note": "Backlog theo ADR-009 (13 job); cập nhật màn và state-machines."
+    },
+    {
+      "spec": "DD-F034 §2〜5 ↔ FN-LIST No.73〜76, 86",
+      "gap": "DD còn ghi ops_watchdog, ops_status_summary, ops_alert_acknowledge, job_rerun là dự kiến / chưa có FN, trong khi FN đã có.",
+      "proposal": "sửa thiết kế",
+      "note": "Chỉ cập nhật tài liệu DD."
+    },
+    {
+      "spec": "OQ-24 (ngưỡng xuất hàng loạt 30 lần / 10 phút)",
+      "gap": "Ngưỡng A-7 là giá trị thiết kế, chờ khách xác nhận.",
+      "proposal": "để mở",
+      "note": "E11-10b đọc ngưỡng từ cấu hình."
+    }
+  ]
+}

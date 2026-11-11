@@ -1,0 +1,445 @@
+{
+  "epic": "E04",
+  "title": "Giao dịch 相対 / せり",
+  "f_ids": ["F-011", "F-012", "F-013", "F-014"],
+  "summary": "Luồng 相対 下書き → 確認待ち → 確定 (khóa business_days → trades → lots theo ADR-003, Idempotency-Key bắt buộc ở TRD-03), 取消 trước khóa sổ có hoàn số lượng lô, ghi kết quả せり cuối do người nhập (không suy luận) và lịch sử せり kèm trước / sau từ phiếu điều chỉnh. Phiếu điều chỉnh sau 確定 thuộc E06; giao hàng thuộc E05.",
+  "constraint": null,
+  "issues": [
+    {
+      "key": "E04-01",
+      "title": "Viết hàm nội bộ check_trade kiểm tra bước 4 của 相対",
+      "discipline": "DB",
+      "description": "Hàm chạy trong transaction của create_trade_draft / update_trade_draft: đọc lô không khóa, kiểm theo thứ tự cố định (a) người mua hợp lệ tại biz_date, (a') bên bán 市場登録, lô 公開, (b) qty ≤ remaining_qty; dừng ở lỗi đầu. Đạt → 確認待ち + audit trade.check 成功; không đạt → giữ 下書き, trả rejection (không raise) + audit trade.check 拒否 trong cùng transaction. Không trừ lô.",
+      "acceptance": [
+        "Người mua hết 許可 hôm qua → rejection M_TRD_01 với basis 許可 và ngày; 売買参加者 一時停止 → basis 承認",
+        "Bên bán 一時停止 → M_TRD_01 có khóa seller_id, basis 市場登録",
+        "qty = remaining + 0.1 → M_TRD_03 kèm remaining_qty mới nhất; qty = remaining → 確認待ち",
+        "Không đạt vẫn commit dòng 下書き và có 1 dòng audit 拒否",
+        "pgTAP phủ mọi nhánh và thứ tự kiểm"
+      ],
+      "spec_refs": ["F-011", "FN-trade-check_trade", "FN-eligibility-eligibility_is_valid_on", "FN-eligibility-participant_eligibility_reason", "DD-F011-aitai-trade-confirm", "TBL-trades", "TBL-lots"],
+      "hours": 8,
+      "hours_basis": "4 điều kiện có thứ tự, 2 nhánh audit, dựng placeholder theo 3 loại người mua.",
+      "priority": "must",
+      "depends_on": ["E00-02d", "E00-03a", "E02-01"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E04-02",
+      "title": "Viết create_trade_draft + TRD-01 tạo nháp 相対",
+      "discipline": "BE",
+      "description": "Hàm: ensure_business_day_open(jst_today()) → đọc lô (M_15 / M_TRD_04) → số lẻ theo đơn vị (M_LOT_06) → người mua không phải 卸売業者 (M_TRD_02) → tax_category (mặc định 軽減8%, A-05) → insert trades 下書き mã T-YYYYMMDD-NNNNN, amount = floor(qty × unit_price) → audit trade.create → gọi check_trade. Route guard ROLE-003, validate body, biz_date không nhận từ client; 確認待ち → 201, 下書き + rejection → 200; nhận Idempotency-Key tùy chọn qua E00-09.",
+      "acceptance": [
+        "Test viewpoint No.1, 4, 7, 8, 12, 13 của DD-F011 đạt",
+        "Ngày 締め済 → 422 M_COM_09, không tạo dòng; 休市日 → 422 M_LOT_03",
+        "12.3 kg × ¥1,795 → amount 22,078",
+        "ROLE-005 gọi → 403 M_19 có log bảo mật",
+        "pgTAP + Vitest"
+      ],
+      "spec_refs": ["F-011", "TRD-01", "FN-trade-create_trade_draft", "FN-trade-check_trade", "FN-common-ensure_business_day_open", "FN-common-next_business_no", "DD-F011-aitai-trade-confirm", "TBL-trades", "PREMISE"],
+      "hours": 8,
+      "hours_basis": "6 bước kiểm trước khi ghi + cấp mã + route map 201 / 200 / 4xx.",
+      "priority": "must",
+      "depends_on": ["E04-01", "E00-10", "E00-07", "E00-08", "E00-09"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E04-03",
+      "title": "Hiện thực sửa / quay lại / bỏ nháp 相対 (TRD-02, TRD-04, TRD-05)",
+      "discipline": "BE",
+      "description": "Các thao tác trên giao dịch chưa 確定, đều kiểm ngày theo trades.biz_date gốc (nháp của ngày cũ còn 開 vẫn thao tác được) và optimistic lock updated_at.",
+      "acceptance": ["Mọi sub-issue xong"],
+      "spec_refs": ["F-011", "TRD-02", "TRD-04", "TRD-05", "DD-F011-aitai-trade-confirm"],
+      "hours": null,
+      "hours_basis": "Issue cha — giờ ở sub-issue.",
+      "priority": "must",
+      "depends_on": ["E04-02"],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E04-03a",
+          "title": "Viết update_trade_draft + TRD-02 sửa nháp và kiểm lại",
+          "discipline": "BE",
+          "description": "ensure_business_day_open(trades.biz_date) → trades FOR UPDATE → status ∈ {下書き, 確認待ち}, updated_at khớp, kind = 相対 (khác → CONFLICT M_COM_17) → coalesce giá trị mới, kiểm lô / người mua mới khi đổi, tính lại amount → đưa về 下書き rồi luôn chạy check_trade. Không cần Idempotency-Key (updated_at chặn ghi đôi).",
+          "acceptance": [
+            "Sửa ở 確認待ち với qty vượt → về 下書き + rejection M_TRD_03",
+            "Sửa giao dịch đã 確定 → 409 M_COM_17 (viewpoint No.16)",
+            "Giao dịch せり → 409",
+            "pgTAP + Vitest"
+          ],
+          "spec_refs": ["F-011", "TRD-02", "FN-trade-update_trade_draft", "FN-trade-check_trade", "TBL-trades"],
+          "hours": 8,
+          "hours_basis": "Cập nhật từng phần có kiểm lại lô / người mua khi đổi + chạy lại check_trade.",
+          "priority": "must",
+          "depends_on": ["E04-01", "E00-07", "E00-08"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E04-03b",
+          "title": "Viết revert_trade_to_draft (TRD-04) và discard_trade_draft (TRD-05)",
+          "discipline": "BE",
+          "description": "TRD-04: 確認待ち → 下書き, không đụng lô, audit trade.revert. TRD-05: chỉ 下書き / 確認待ち, audit trade.discard với before_data là ảnh chụp đủ dòng rồi DELETE vật lý; không trả lại số T-, không đụng lô.",
+          "acceptance": [
+            "remaining_qty của lô không đổi sau TRD-04 / TRD-05 (viewpoint No.3)",
+            "TRD-04 khi status ≠ 確認待ち → 409 M_COM_17",
+            "Sau TRD-05 dòng audit còn đủ snapshot để truy vết",
+            "pgTAP + Vitest"
+          ],
+          "spec_refs": ["F-011", "TRD-04", "TRD-05", "FN-trade-revert_trade_to_draft", "FN-trade-discard_trade_draft", "TBL-trades", "TBL-audit_logs"],
+          "hours": 4,
+          "hours_basis": "2 chuyển trạng thái đơn giản, 1 có xóa vật lý sau audit.",
+          "priority": "must",
+          "depends_on": ["E04-02"],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E04-04",
+      "title": "Viết confirm_trade + TRD-03 確定 相対 (khóa dòng, Idempotency-Key bắt buộc)",
+      "discipline": "BE",
+      "description": "Hàm khóa đúng thứ tự ADR-003: business_days FOR SHARE → trades FOR UPDATE → lots FOR UPDATE, rồi kiểm sau khi giữ khóa theo thứ tự chuẩn ①〜⑧ (ngày, status + updated_at, không phải 卸売業者, người mua hợp lệ, bên bán 市場登録, lô 公開, số lẻ, qty ≤ remaining); ghi trừ remaining_qty, sett_refresh_lot_status, trades 確定 + confirmed_by / confirmed_at + delivery_status 待機中, audit trade.confirm là lệnh cuối. Route: guard ROLE-003, Idempotency-Key bắt buộc (replay → 200 gốc + Idempotent-Replayed, khác payload → 409), lỗi BIZ → writeAuditLog 拒否.",
+      "acceptance": [
+        "Test viewpoint No.1, 2, 9, 10, 14, 15, 16, 19, 21 của DD-F011 đạt",
+        "2 phiên song song 30 kg trên lô còn 50 → 1 thành công, 1 nhận 422 M_TRD_03 remaining 20",
+        "Thiếu Idempotency-Key → 400 M_01; cùng key cùng payload → lô chỉ trừ 1 lần",
+        "Vi phạm bất kỳ → rollback toàn bộ, giao dịch giữ 確認待ち, có audit 拒否",
+        "Trigger chặn UPDATE cột giá gốc sau 確定",
+        "pgTAP + Vitest"
+      ],
+      "spec_refs": ["F-011", "F-009", "TRD-03", "FN-trade-confirm_trade", "FN-lot-sett_refresh_lot_status", "FN-common-writeAuditLog", "DD-F011-aitai-trade-confirm", "ADR-003", "ADR-004", "TBL-trades", "TBL-lots"],
+      "hours": 12,
+      "hours_basis": "Khóa 3 mức có thứ tự, 8 kiểm tra sau khóa, idempotency + audit ở 2 tầng; tương tranh phải test.",
+      "priority": "must",
+      "depends_on": ["E04-02", "E03-01", "E02-01", "E00-09", "E00-03b"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E04-05",
+      "title": "Viết cancel_trade + TRD-09 取消 trước khóa sổ",
+      "discipline": "BE",
+      "description": "Lý do 1〜500 bắt buộc; khóa business_days → trades → lots; kiểm status ∈ {確定, 再確定} + updated_at (409), delivered_qty = 0 (M_TRD_11), không có phiếu 申請中 / 差戻し (M_TRD_12 + request_no); hoàn qty hiệu lực từ sett_trade_effective vào lô, trades 取消 + delivery_status NULL, sett_refresh_lot_status, audit trade.cancel. Guard chỉ ROLE-003 (prototype cho ROLE-005 — bỏ). Áp cho cả giao dịch せり.",
+      "acceptance": [
+        "Viewpoint No.17, 18 của DD-F011 đạt",
+        "Ngày 締め済 → 422 M_COM_09 (UI hướng sang phiếu điều chỉnh)",
+        "Giao dịch 再確定 qty hiệu lực 35 → lô hoàn đúng 35",
+        "ROLE-005 gọi → 403",
+        "pgTAP + Vitest"
+      ],
+      "spec_refs": ["F-012", "TRD-09", "FN-trade-cancel_trade", "FN-trade-sett_trade_effective", "FN-lot-sett_refresh_lot_status", "DD-F011-aitai-trade-confirm", "TBL-correction_requests"],
+      "hours": 8,
+      "hours_basis": "Khóa 3 mức, 3 guard nghiệp vụ, hoàn số lượng theo giá trị hiệu lực.",
+      "priority": "must",
+      "depends_on": ["E04-04", "E04-06", "E03-01"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E04-06",
+      "title": "Viết hàm đọc sett_trade_effective (giá trị hiệu lực sau điều chỉnh)",
+      "discipline": "DB",
+      "description": "Hàm language sql stable: qty / amount = gốc + Σ trade_adjustments (reverse + delta); unit_price / buyer_id lấy từ dòng delta mới nhất (created_at, id giảm dần), không có thì từ trades. Không lọc status — hàm gọi tự loại 取消. Là nguồn duy nhất cho E04 / E05 / E06 / E07 / E09.",
+      "acceptance": [
+        "Bảng ví dụ 40 → 35 kg → đơn giá 1,900 cho ra 35 kg / ¥66,500 / ¥1,900",
+        "Không có điều chỉnh → trả giá trị gốc; id không tồn tại → 0 dòng",
+        "Bất biến amount = floor(qty × unit_price) của delta cuối kiểm bằng pgTAP"
+      ],
+      "spec_refs": ["F-012", "F-014", "F-015", "FN-trade-sett_trade_effective", "TBL-trades", "TBL-trade_adjustments", "ADR-004"],
+      "hours": 4,
+      "hours_basis": "1 hàm đọc 3 lateral, không khóa, ví dụ tính đã có sẵn.",
+      "priority": "must",
+      "depends_on": ["E00-02d"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E04-07",
+      "title": "Viết TRD-06 dữ liệu nhập giao dịch và TRD-07 danh sách giao dịch",
+      "discipline": "BE",
+      "description": "TRD-06 (ROLE-003): lô 公開 còn remaining_qty > 0 của 業務日, người mua 仲卸 / 売買参加者 / 買出人 kèm trạng thái hiệu lực hôm nay, 業務日 + trạng thái; trả trọn không phân trang. TRD-07 (ROLE-003 / 005 / 011): lọc 業務日 / kind / status / người mua / mine, limit ≤ 200, giá trị hiệu lực và cờ 修正申請中; dùng cho SCR-014, 10 giao dịch gần nhất và danh sách nháp mọi ngày 開 của SCR-012.",
+      "acceptance": [
+        "TRD-06 p95 ≤ 2 giây với dữ liệu năm 3 (viewpoint No.20)",
+        "TRD-07 status=下書き,確認待ち trả nháp mọi 業務日 開, mọi người tạo",
+        "limit > 200 → 400 M_06; ROLE-001 gọi → 403",
+        "Vitest"
+      ],
+      "spec_refs": ["F-011", "F-012", "F-013", "TRD-06", "TRD-07", "FN-eligibility-eligibility_is_valid_on", "FN-trade-sett_trade_effective", "DD-F011-aitai-trade-confirm"],
+      "hours": 8,
+      "hours_basis": "2 API đọc, 1 có nhiều bộ lọc + phân trang và mục tiêu hiệu năng.",
+      "priority": "must",
+      "depends_on": ["E04-06", "E02-01", "E00-07", "E00-08"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E04-08",
+      "title": "Viết TRD-08 chi tiết giao dịch",
+      "discipline": "BE",
+      "description": "Giá trị gốc + hiệu lực, lô / bên bán / người mua, kết quả せり nếu có, status_history từ audit_logs (entity trades, cũ → mới, gồm lần bị từ chối), giao hàng + ngoại lệ, phiếu điều chỉnh + bản ghi reverse / delta, thông tin hủy, điều kiện bật nút 取消. Dòng 精算 không trả ở đây (DLV-06).",
+      "acceptance": [
+        "Giao dịch せり có khối seri_result; 相対 thì null",
+        "Lịch sử gồm cả seri.record / trade.adjust (xem spec_gaps), sắp cũ → mới",
+        "Cờ can_cancel đúng 4 điều kiện của F-012",
+        "403 ghi audit 拒否; id sai → 404 M_15",
+        "Vitest"
+      ],
+      "spec_refs": ["F-012", "F-021", "TRD-08", "FN-trade-sett_trade_effective", "TBL-audit_logs", "TBL-deliveries", "TBL-delivery_exceptions", "TBL-correction_requests", "TBL-trade_adjustments"],
+      "hours": 8,
+      "hours_basis": "1 API đọc ghép 7 nguồn + tính cờ nút.",
+      "priority": "must",
+      "depends_on": ["E04-06", "E00-07", "E00-08"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E04-09",
+      "title": "Xây bộ test tương tranh / thứ tự khóa cho chốt giao dịch",
+      "discipline": "QA",
+      "description": "Kịch bản 2 session pgTAP / script: 2 phiên TRD-03 cùng lô; SERI-01 và TRD-03 cùng lô; TRD-03 trong khi lock_business_day; TRD-09 song song với TRD-03 khác cùng lô; bấm TRD-03 lặp cùng Idempotency-Key. Xác nhận thứ tự business_days → trades → lots không deadlock và remaining_qty không âm.",
+      "acceptance": [
+        "Chạy lặp 100 lần không deadlock, không âm",
+        "Mỗi kịch bản ghi nguồn (F-011 AC-7 / AC-8, DD-F013 viewpoint 9, ADR-003)",
+        "Chạy trong CI"
+      ],
+      "spec_refs": ["ADR-003", "DD-F011-aitai-trade-confirm", "DD-F013-seri-result-history", "FN-trade-confirm_trade", "FN-trade-record_seri_result", "FN-closing-lock_business_day"],
+      "hours": 8,
+      "hours_basis": "5 cặp tương tranh có điểm dừng, chạy lặp trong CI.",
+      "priority": "should",
+      "depends_on": ["E04-04", "E04-05", "E04-10", "E06-02", "E00-16"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E04-10",
+      "title": "Viết record_seri_result + SERI-01 ghi kết quả せり",
+      "discipline": "BE",
+      "description": "Chỉ ghi giá trị người điều hành nhập (không suy luận người thắng / 符丁). Hàm: ensure_business_day_open(jst_today()) → lots FOR UPDATE → kiểm result_at trong 業務日 và ≤ now (M_SERI_03), định dạng, người thắng (M_TRD_02 / M_TRD_01), bên bán 市場登録, lô 公開, qty ≤ remaining, chống nhập trùng cùng lot + result_at + nội dung (M_SERI_70) → insert trades せり 確定 + seri_results (recorded_by = confirmed_by) → trừ lô → audit seri.record. Route ROLE-003, Idempotency-Key qua E00-09 (SCR-016 luôn gửi).",
+      "acceptance": [
+        "Viewpoint No.1〜6, 8 của DD-F013 đạt",
+        "7.3 kg × ¥1,455 → amount 10,621",
+        "Gửi lại cùng key → 201 cũ + Idempotent-Replayed, chỉ 1 giao dịch",
+        "Thiếu người thắng → 400 M_01, không có giá trị mặc định",
+        "pgTAP + Vitest"
+      ],
+      "spec_refs": ["F-013", "SERI-01", "FN-trade-record_seri_result", "FN-common-next_business_no", "DD-F013-seri-result-history", "TBL-trades", "TBL-seri_results", "TBL-lots"],
+      "hours": 12,
+      "hours_basis": "7 kiểm tra có thứ tự + chống trùng + ghi 3 bảng trong 1 transaction + idempotency.",
+      "priority": "must",
+      "depends_on": ["E02-01", "E03-01", "E00-10", "E00-03a", "E00-07", "E00-08", "E00-09"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E04-11",
+      "title": "Viết SERI-02 lịch sử せり và SERI-03 chi tiết + trước / sau",
+      "discipline": "BE",
+      "description": "SERI-02: kết quả せり theo 業務日 / lô / người mua, phân trang, cờ đã sửa (có phiếu 承認) và 修正申請中. SERI-03: kết quả gốc + từng phiếu điều chỉnh (loại, before_*, new_*, lý do, người lập / duyệt, trạng thái) + trade_adjustments + giá trị hiệu lực. Không có bảng lịch sử riêng.",
+      "acceptance": [
+        "Phiếu 単価 承認 → SERI-03 hiện trước / sau + lý do, giao dịch 再確定 (viewpoint No.7)",
+        "tradeId là 相対 → 404 M_15",
+        "ROLE-003 / 005 / 011 đọc được, vai trò khác 403",
+        "Vitest"
+      ],
+      "spec_refs": ["F-014", "SERI-02", "SERI-03", "FN-trade-sett_trade_effective", "DD-F013-seri-result-history", "TBL-correction_requests", "TBL-trade_adjustments", "TBL-seri_results"],
+      "hours": 8,
+      "hours_basis": "2 API đọc, ghép phiếu điều chỉnh + bản ghi delta.",
+      "priority": "must",
+      "depends_on": ["E04-06", "E00-07", "E00-08"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E04-12",
+      "title": "Dựng màn SCR-012 nhập 相対取引 (Option B, xác nhận inline)",
+      "discipline": "FE",
+      "description": "Màn PC nhập liên tục bằng bàn phím: form → panel xác nhận inline (gộp SCR-013) → 確定; giữ lô cho giao dịch kế tiếp. Chốt không cho offline.",
+      "acceptance": ["Mọi sub-issue xong; WCAG 2.1 AA cho luồng chốt (QA-007)"],
+      "spec_refs": ["SCR-012", "F-011", "DD-F011-aitai-trade-confirm"],
+      "hours": null,
+      "hours_basis": "Issue cha — giờ ở sub-issue.",
+      "priority": "must",
+      "depends_on": ["E04-07"],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E04-12a",
+          "title": "Dựng form nhập SCR-012: lô, người mua, số lượng, đơn giá, 税区分",
+          "discipline": "FE",
+          "description": "Chọn lô / người mua từ TRD-06 (hiện trạng thái hiệu lực, remaining + đơn vị), validate khi rời ô cùng message ID server (M_01, M_LOT_06, M_07, M_06), Enter → TRD-01 / TRD-02; hiển thị rejection M_TRD_01 / 03 / 04 tại chỗ, giữ nháp để sửa.",
+          "acceptance": [
+            "Toàn bộ thao tác làm được bằng bàn phím",
+            "Rejection 200 hiển thị đúng placeholder theo loại người mua",
+            "Test component"
+          ],
+          "spec_refs": ["SCR-012", "TRD-01", "TRD-02", "TRD-06"],
+          "hours": 12,
+          "hours_basis": "Form nhiều ô có tra cứu, validate theo đơn vị lô và 2 chế độ tạo / sửa.",
+          "priority": "must",
+          "depends_on": ["E04-02", "E04-03a", "E04-07", "E00-12a", "E00-12b", "E00-12c", "E00-12d"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E04-12b",
+          "title": "Dựng panel xác nhận inline và nút 確定 trên SCR-012",
+          "discipline": "FE",
+          "description": "Panel M_TRD_08 sau 201; Ctrl+Enter → TRD-03 với Idempotency-Key sinh 1 lần / lần mở panel; offline → M_COM_22 không gửi; timeout 10 giây → M_TRD_07; 409 → tải lại; 422 M_TRD_03 → hiện số còn lại mới; Esc / 修正する → TRD-04; thành công toast M_TRD_05, xóa người mua / số lượng / đơn giá, giữ lô.",
+          "acceptance": [
+            "Bấm 確定 2 lần chỉ 1 giao dịch",
+            "Mất mạng khi bấm → không có request",
+            "Test component"
+          ],
+          "spec_refs": ["SCR-012", "TRD-03", "TRD-04"],
+          "hours": 8,
+          "hours_basis": "Panel trạng thái + 5 nhánh lỗi + idempotency phía client.",
+          "priority": "must",
+          "depends_on": ["E04-12a", "E04-04", "E04-03b"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E04-12c",
+          "title": "Dựng vùng 10 giao dịch gần nhất và nhắc nháp tồn trên SCR-012",
+          "discipline": "FE",
+          "description": "Bảng 10 giao dịch gần nhất (TRD-07); thông báo M_TRD_13 khi còn 下書き / 確認待ち trên mọi 業務日 開 (mọi người tạo), mở lại nháp ngày hôm nay hoặc chỉ cho 破棄 nháp ngày cũ (TRD-05).",
+          "acceptance": [
+            "Nháp ngày cũ chỉ có nút 破棄",
+            "Danh sách làm mới sau mỗi lần 確定",
+            "Test component"
+          ],
+          "spec_refs": ["SCR-012", "TRD-07", "TRD-05"],
+          "hours": 8,
+          "hours_basis": "2 khối danh sách có quy tắc thao tác theo ngày của nháp.",
+          "priority": "must",
+          "depends_on": ["E04-12a", "E04-03b", "E04-07"],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E04-13",
+      "title": "Dựng màn SCR-014 danh sách giao dịch",
+      "discipline": "FE",
+      "description": "Bảng giao dịch lọc 業務日 / 相対・せり / trạng thái / người mua / của tôi, hiện giá trị hiệu lực và cờ 修正申請中, phân trang, link SCR-015; ROLE-003 / 005 / 011.",
+      "acceptance": [
+        "Đủ cột / lọc theo SCR-014",
+        "Giao dịch có điều chỉnh hiện giá trị hiệu lực",
+        "Test component"
+      ],
+      "spec_refs": ["SCR-014", "TRD-07"],
+      "hours": 8,
+      "hours_basis": "Màn danh sách PC nhiều bộ lọc.",
+      "priority": "must",
+      "depends_on": ["E04-07", "E00-12c"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E04-14",
+      "title": "Dựng màn SCR-015 chi tiết giao dịch",
+      "discipline": "FE",
+      "description": "Màn chi tiết dùng chung ROLE-003 / 005 / 011, khối hiển thị và nút theo vai trò.",
+      "acceptance": ["Mọi sub-issue xong"],
+      "spec_refs": ["SCR-015", "F-012", "F-021"],
+      "hours": null,
+      "hours_basis": "Issue cha — giờ ở sub-issue.",
+      "priority": "must",
+      "depends_on": ["E04-08"],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E04-14a",
+          "title": "Dựng phần xem SCR-015: gốc / hiệu lực, lịch sử, giao hàng, phiếu, 精算",
+          "discipline": "FE",
+          "description": "Khối A〜E từ TRD-08 (gốc + hiệu lực, lịch sử trạng thái, giao hàng + ngoại lệ, phiếu điều chỉnh + reverse / delta, thông tin hủy); khối F dòng 精算 từ DLV-06 chỉ cho ROLE-005 / 011; lỗi đọc từng vùng → M_COM_16 + tải lại.",
+          "acceptance": [
+            "ROLE-003 không gọi DLV-06, không thấy khối F",
+            "Test component"
+          ],
+          "spec_refs": ["SCR-015", "TRD-08", "DLV-06"],
+          "hours": 8,
+          "hours_basis": "6 khối hiển thị, 2 API, ẩn hiện theo vai trò.",
+          "priority": "must",
+          "depends_on": ["E04-08", "E05-05", "E00-12a", "E00-12c"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E04-14b",
+          "title": "Dựng nút / dialog 取消（締め前）và nút 修正申請 trên SCR-015",
+          "discipline": "FE",
+          "description": "G-1 chỉ ROLE-003, bật khi ngày 開, delivered_qty = 0, không có phiếu mở, online; dialog lý do 1〜500 → TRD-09, M_TRD_10; G-3 nêu lý do khi không bật; G-2 ROLE-003 / 005 → SCR-023.",
+          "acceptance": [
+            "4 điều kiện bật G-1 đúng, G-3 hiện lý do tương ứng",
+            "409 → tải lại; 403 → M_19",
+            "Test component"
+          ],
+          "spec_refs": ["SCR-015", "TRD-09"],
+          "hours": 4,
+          "hours_basis": "1 dialog + logic bật nút từ cờ API.",
+          "priority": "must",
+          "depends_on": ["E04-14a", "E04-05"],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E04-15",
+      "title": "Dựng màn SCR-016 nhập kết quả せり",
+      "discipline": "FE",
+      "description": "Form lô, người thắng, số lượng, đơn giá, 税区分, 結果時刻, 場内番号, ghi chú; banner M_SERI_01 (hệ thống không suy luận); panel xác nhận phía client (không có nháp server) → SERI-01 với Idempotency-Key; danh sách kết quả trong ngày (SERI-02).",
+      "acceptance": [
+        "result_at ngoài 業務日 → M_SERI_03 ngay trên form",
+        "Bấm 確定 lặp sau lỗi mạng dùng lại key, không tạo 2 giao dịch",
+        "Offline → M_COM_22",
+        "Test component"
+      ],
+      "spec_refs": ["SCR-016", "SERI-01", "SERI-02", "TRD-06"],
+      "hours": 12,
+      "hours_basis": "Form 8 ô + panel client + danh sách trong ngày, 3 API.",
+      "priority": "must",
+      "depends_on": ["E04-10", "E04-11", "E04-07", "E00-12a", "E00-12b", "E00-12c"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E04-16",
+      "title": "Dựng màn SCR-017 lịch sử せり và sửa đổi",
+      "discipline": "FE",
+      "description": "Danh sách kết quả せり (SERI-02) với cờ đã sửa / 修正申請中; panel chi tiết (SERI-03) hiện gốc, trước / sau, lý do, người duyệt; nút sửa mở SCR-023, hủy khi ngày mở dẫn sang SCR-015; banner M_SERI_04.",
+      "acceptance": [
+        "Không có thao tác sửa trực tiếp kết quả",
+        "Test component"
+      ],
+      "spec_refs": ["SCR-017", "SERI-02", "SERI-03"],
+      "hours": 8,
+      "hours_basis": "Danh sách + panel chi tiết so sánh trước / sau.",
+      "priority": "must",
+      "depends_on": ["E04-11", "E00-12c"],
+      "constraint": null,
+      "sub_issues": []
+    }
+  ],
+  "spec_not_issued": [
+    {"spec": "SCR-013 màn xác nhận riêng", "reason": "Gộp vào SCR-012 (wireframe Option B, PREMISE §1); làm trong E04-12b."},
+    {"spec": "Sửa kết quả せり / giao dịch sau 確定 (COR-01〜07, SCR-023 / 024)", "reason": "F-021 → E06; E04 chỉ hiện lịch sử và dẫn link."},
+    {"spec": "Chốt 相対 / ghi せり khi mất mạng", "reason": "Ngoài phạm vi theo [ASSUMPTION QA-005]; chỉ chặn phía client."},
+    {"spec": "OCR / đọc 符丁・手やり / suy luận người thắng せり", "reason": "SCOPE-OUT-02, CAP-HUMAN-01."},
+    {"spec": "Kiểm 2 người khác nhau cho nhập / xác nhận せり", "reason": "Chờ OQ-19; giả định hiện tại cho phép cùng người."},
+    {"spec": "Hàng đợi offline, giao hàng của giao dịch", "reason": "E11 / E05."}
+  ],
+  "spec_gaps": [
+    {"spec": "DD-F013 §1 vs FN-trade-record_seri_result / SERI-01 v1.1 / TBL-seri_results", "gap": "DD ghi tax_category cố định 軽減8%, seri_slot_no 1〜20 (số), bên bán không hợp lệ → M_LOT_01 và không có kiểm trùng; FN / API nhận tax_category, seri_slot_no là text ≤ 20 ký tự, bên bán → M_TRD_01, có M_SERI_70.", "proposal": "sửa thiết kế", "note": "E04-10 làm theo FN + API; sửa DD-F013 §1 bảng lỗi và bước 3."},
+    {"spec": "FN-trade-check_trade mục Khác biệt so với prototype", "gap": "Còn câu 「to-be cho cả lô 確定 còn số lượng」 trái với bản 1.2 (chỉ 公開 bán được, 確定 = remaining 0).", "proposal": "sửa thiết kế", "note": "Xóa câu cũ; E04-01 làm theo phần mô tả chính."},
+    {"spec": "TRD-08 status_history vs FN-trade-record_seri_result / FN-correction-decide_correction", "gap": "TRD-08 lọc audit theo action trade.*, nhưng ghi せり dùng seri.record và duyệt phiếu dùng correction.approve → lịch sử giao dịch せり thiếu bước tạo.", "proposal": "giả định", "note": "E04-08 lọc theo entity = trades và entity_id (không lọc tiền tố action); cập nhật TRD-08."},
+    {"spec": "FN-trade-create_trade_draft edge case / TRD-01", "gap": "Bấm đúp TRD-01 tạo 2 nháp; Idempotency-Key ở TRD-01 chỉ khuyến nghị và nơi lưu key chưa có trong DB design (đã nêu ở E00-09).", "proposal": "giả định", "note": "SCR-012 khóa nút khi đang gửi và gửi key; TRD-01 dùng E00-09 khi có key."},
+    {"spec": "F-013 せり (US-04-05, rủi ro R-11)", "gap": "Chưa có phân tích chức năng chi tiết; mọi quy tắc mượn F-011.", "proposal": "để mở", "note": "Không chặn sprint; nếu khách thêm luật riêng (vd 2 người xác nhận, OQ-19) thì CR nhỏ cho E04-10."}
+  ]
+}

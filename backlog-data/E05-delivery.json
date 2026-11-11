@@ -1,0 +1,381 @@
+{
+  "epic": "E05",
+  "title": "Giao hàng",
+  "f_ids": ["F-015", "F-016", "F-017", "F-018"],
+  "summary": "Danh sách chờ giao + job nhắc tồn đọng 09:00, ghi giao nhiều lần (1 lần giao = 1 dòng 精算, biz_date = ngày JST của thời điểm giao thực tế, cùng 1 đường code cho online và replay offline), cảnh báo người mua hết hiệu lực không chặn, hủy lần giao ghi sai, ngoại lệ 不足 / 超過 / 返品 / 一部取消, và tra cứu liên kết giao hàng ↔ dòng 精算. Hàng đợi PWA và màn SCR-021 thuộc E11.",
+  "constraint": null,
+  "issues": [
+    {
+      "key": "E05-01",
+      "title": "Hiện thực ghi 1 lần giao record_delivery + DLV-03 (online và replay)",
+      "discipline": "BE",
+      "description": "Lõi F-016: mỗi lần giao sinh dòng deliveries 引渡し và 1 dòng settlement_lines, cập nhật delivered_qty / delivery_status / trạng thái lô, ghi sync_operations trong cùng transaction. Header Idempotency-Key + X-Occurred-At bắt buộc cả khi online (ADR-006).",
+      "acceptance": ["Mọi sub-issue xong; test viewpoint DD-F016 No.1〜11, 13〜15, 18, 19 đạt"],
+      "spec_refs": ["F-016", "F-018", "DLV-03", "FN-delivery-record_delivery", "DD-F016-multi-delivery-settlement", "ADR-003", "ADR-006"],
+      "hours": null,
+      "hours_basis": "Issue cha — giờ ở sub-issue.",
+      "priority": "must",
+      "depends_on": ["E04-06"],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E05-01a",
+          "title": "Viết lõi record_delivery: khóa, số lượng còn lại, lần giao + dòng 精算",
+          "discipline": "DB",
+          "description": "Thứ tự: sync_apply_operation (key đã áp dụng → dựng lại response, không ghi) → lock_incentive_period_shared(tháng của biz_date) ở bước khóa (1) → biz_date = ngày JST của p_occurred_at, ensure_business_day_open FOR SHARE → trades FOR UPDATE (取消 → M_DLV_10, chưa 確定 → M_DLV_51) → lots FOR UPDATE → kiểm đơn vị → còn lại = qty hiệu lực (sett_trade_effective) − delivered_qty, vượt → M_DLV_01 (online) → rule_version_for_date(biz_date) (không có → M_INC_82) → insert deliveries (D-YYYYMMDD-NNNNN, seq_no, delivered_at = p_occurred_at, synced_at khi replay) → insert settlement_lines 引渡し (người mua / đơn giá hiệu lực, amount = floor(qty × đơn giá), target_period = tháng biz_date, tax_category của giao dịch) → cập nhật trades + sett_refresh_lot_status → sync_operations 適用済 → attachment_register (chỉ online) → audit delivery.record cuối cùng.",
+          "acceptance": [
+            "Ví dụ 100 kg × ¥1,800 giao 40 / 35 / 25 → 3 dòng 精算 tổng ¥180,000, 完了 ở lần 3",
+            "X-Occurred-At 23:58 JST ngày D gửi lúc 00:05 ngày D+1 → biz_date = D, delivered_at = 23:58",
+            "Ngày của X-Occurred-At 締め済 → M_COM_09, không tự ghi sang ngày khác",
+            "Giao dịch 再確定 đơn giá 1,700 → dòng 精算 dùng 1,700 (viewpoint No.19)",
+            "Gọi lại cùng client_op_id cùng payload → không thêm dòng; khác payload → CONFLICT M_COM_17",
+            "Lô 引渡し完了 chỉ khi mọi giao dịch không 取消 của lô 完了 (viewpoint No.3)",
+            "pgTAP"
+          ],
+          "spec_refs": ["F-016", "F-018", "FN-delivery-record_delivery", "FN-sync-sync_apply_operation", "FN-trade-sett_trade_effective", "FN-rule-rule_version_for_date", "FN-lot-sett_refresh_lot_status", "FN-attachment-attachment_register", "FN-incentive-record_incentive_delta", "TBL-deliveries", "TBL-settlement_lines", "TBL-sync_operations", "ADR-003", "ADR-005", "ADR-006"],
+          "hours": 12,
+          "hours_basis": "Khóa 4 mức có thứ tự, ghi 4 bảng + đính kèm + audit trong 1 transaction, nhiều nhánh lỗi; nhánh cảnh báo và replay tách riêng.",
+          "priority": "must",
+          "depends_on": ["E04-06", "E03-01", "E00-02e", "E00-02g", "E00-10", "E00-03a", "E00-04c", "E07-03", "E07-06c"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E05-01b",
+          "title": "Thêm nhánh cảnh báo người mua hết hiệu lực vào record_delivery",
+          "discipline": "BE",
+          "description": "participant_eligibility_reason(người mua hiệu lực, biz_date): không hợp lệ + online + chưa ack → BIZ M_DLV_02, không ghi gì (route không ghi audit 拒否); đã ack → lưu buyer_warning + buyer_warning_ack_at; replay → lưu buyer_warning, ack_at NULL. Có cảnh báo → notify_event('buyer_ineligible_delivery') cho ROLE-005. Phiếu điều chỉnh 申請中 không chặn, response kèm request_no.",
+          "acceptance": [
+            "Viewpoint No.7, 10 của DD-F016 đạt",
+            "Replay với người mua hết hiệu lực → ghi được, ack_at NULL, có thông báo",
+            "pgTAP"
+          ],
+          "spec_refs": ["F-016", "FN-delivery-record_delivery", "FN-eligibility-participant_eligibility_reason", "FN-notification-notify_event", "PREMISE"],
+          "hours": 4,
+          "hours_basis": "3 nhánh theo online / ack / replay + 1 thông báo.",
+          "priority": "must",
+          "depends_on": ["E05-01a", "E02-01", "E08-01"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E05-01c",
+          "title": "Thêm luật replay 「sớm hơn thắng」 tự đảo lần giao muộn hơn",
+          "discipline": "BE",
+          "description": "Chỉ khi p_is_replay và qty vượt còn lại: ứng viên = lần giao 引渡し cùng giao dịch, cũng đến từ hàng đợi, delivered_at muộn hơn, cùng biz_date, chưa bị đảo / chưa có 返品; cộng dần từ muộn nhất tới khi đủ, chạy khối ghi đảo dùng chung với reverse_delivery (dòng 取消 lý do đồng bộ + 引渡し取消 trong 精算), audit delivery.auto_reverse cho từng lần, notify sync_conflict cho ROLE-004 / ROLE-005. Không đủ → M_DLV_01 (route chuyển 要照合 qua E11).",
+          "acceptance": [
+            "Ví dụ còn 60: B 05:10 đồng bộ trước 40, A 05:05 đồng bộ sau 40 → B bị đảo, A được ghi, còn 20",
+            "B là lần ghi online → không bị đảo, A nhận M_DLV_01",
+            "Không bao giờ âm delivered_qty",
+            "pgTAP"
+          ],
+          "spec_refs": ["F-016", "F-033", "FN-delivery-record_delivery", "FN-delivery-reverse_delivery", "DD-F033-offline-sync-replay", "ADR-006"],
+          "hours": 8,
+          "hours_basis": "Chọn tập ứng viên có điều kiện + ghi đảo nhiều dòng + audit / thông báo theo từng lần.",
+          "priority": "must",
+          "depends_on": ["E05-01a", "E05-02", "E05-12"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E05-01d",
+          "title": "Viết route DLV-03 POST /api/deliveries/{tradeId}",
+          "discipline": "BE",
+          "description": "Guard ROLE-004; header Idempotency-Key (UUID v4), X-Occurred-At, X-Device-Id bắt buộc, X-Sync-Replay tùy chọn; validate body (便番号 1〜20, 受渡先 1〜100, 受取人 ≤ 50, ghi chú ≤ 500, qty theo đơn vị lô), X-Occurred-At tương lai > 5 phút → 400; attachments chỉ online (kèm X-Sync-Replay → 400 M_04), kiểm file token; gọi 1 rpc; map lỗi, replay trùng → header Idempotent-Replayed + M_COM_19; 201 M_DLV_04 / M_DLV_05.",
+          "acceptance": [
+            "Viewpoint No.9, 14, 18 của DD-F016 đạt",
+            "Thiếu X-Occurred-At / Idempotency-Key → 400 M_01",
+            "ROLE-003 / ROLE-005 gọi → 403 có audit 拒否",
+            "Vitest"
+          ],
+          "spec_refs": ["DLV-03", "FN-delivery-record_delivery", "FN-common-jsonFromRpcError", "API-COMMON-CONVENTIONS", "DD-F016-multi-delivery-settlement"],
+          "hours": 8,
+          "hours_basis": "4 header + 6 trường validate + kiểm tệp + map lỗi online / replay.",
+          "priority": "must",
+          "depends_on": ["E05-01a", "E00-07", "E00-08", "E00-04b", "E00-03b"],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E05-02",
+      "title": "Viết reverse_delivery + DLV-04 hủy lần giao ghi sai",
+      "discipline": "BE",
+      "description": "Đọc lần gốc → lock_incentive_period_shared(target_period dòng gốc) → business_days của ngày lần gốc FOR SHARE (締め済 → M_DLV_09 hướng sang 返品) → trades → lots FOR UPDATE → kiểm loại dòng (M_DLV_50), đã đảo (M_DLV_13), đã có 返品 (M_DLV_72) → insert deliveries 取消 qty âm, reversal_of_id, cùng biz_date gốc → mỗi người mua có Σ amount dòng của lần gốc (gồm 修正) > 0 thì 1 dòng 引渡し取消 âm đúng Σ, kế thừa target_period / rule_version_id → cập nhật delivered_qty / delivery_status, sett_refresh_lot_status → audit delivery.reverse. Khối ghi đảo tách thành hàm nội bộ để E05-01c dùng lại. Route ROLE-004, lý do 1〜500.",
+      "acceptance": [
+        "Hủy #2 35 kg → dòng 取消 −35, 精算 −¥63,000, 完了 → 引渡し中, lô 引渡し完了 → 確定 (viewpoint No.6)",
+        "Lần giao có 修正 +¥2,000 → dòng đảo −¥74,000",
+        "Hủy 2 lần → M_DLV_13; ngày 締め済 → M_DLV_09 (viewpoint No.12, 16)",
+        "pgTAP + Vitest"
+      ],
+      "spec_refs": ["F-016", "F-018", "DLV-04", "FN-delivery-reverse_delivery", "FN-lot-sett_refresh_lot_status", "DD-F016-multi-delivery-settlement", "TBL-deliveries", "TBL-settlement_lines", "ADR-004"],
+      "hours": 12,
+      "hours_basis": "Khóa theo ngày của lần gốc, 4 guard, đảo 精算 theo từng người mua gồm dòng 修正, tách khối dùng lại.",
+      "priority": "must",
+      "depends_on": ["E05-01a", "E03-01", "E07-06c", "E00-07", "E00-08"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E05-03",
+      "title": "Viết record_delivery_exception + DLV-05 ghi ngoại lệ giao hàng",
+      "discipline": "BE",
+      "description": "Ghi sổ vào 業務日 hôm nay: ensure_business_day_open → trades → lots FOR UPDATE; giới hạn theo loại (不足 / 一部取消 ≤ còn lại, 超過 không giới hạn, 返品 bắt buộc delivery_id và ≤ phần thực giao còn lại của lần đó) → insert delivery_exceptions (confirmed_by). Chỉ 返品: lock_incentive_period_shared(target_period dòng gốc) đặt ở bước khóa (1), insert deliveries 返品 qty âm + settlement_lines 返品 amount = −floor(qty × đơn giá hiệu lực), target_period của dòng gốc (A-07), giảm delivered_qty, sett_refresh_lot_status. Tệp 0〜5 (ATT-02 chế độ A), notify delivery_exception cho ROLE-005, audit. Route ROLE-004, chỉ online.",
+      "acceptance": [
+        "Lần giao ngày D đã 締め済, 返品 5 kg hôm nay → dòng 返品 biz_date hôm nay, target_period = tháng D (viewpoint No.17)",
+        "返品 vượt phần còn lại của lần giao → M_DLV_16; thiếu delivery_id → M_DLV_73",
+        "不足 / 超過 / 一部取消 không đổi delivered_qty",
+        "Có tệp → attachments 証憑3年",
+        "pgTAP + Vitest"
+      ],
+      "spec_refs": ["F-017", "F-018", "DLV-05", "FN-delivery-record_delivery_exception", "FN-attachment-attachment_register", "DD-F016-multi-delivery-settlement", "TBL-delivery_exceptions", "TBL-deliveries", "TBL-settlement_lines", "PREMISE"],
+      "hours": 12,
+      "hours_basis": "4 loại ngoại lệ với giới hạn riêng, nhánh 返品 ghi 3 bảng + khóa kỳ thưởng, kèm tệp và thông báo.",
+      "priority": "must",
+      "depends_on": ["E05-01a", "E05-12", "E03-01", "E07-06c", "E08-01", "E00-04b", "E00-04c", "E00-07", "E00-08"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E05-04",
+      "title": "Viết DLV-01 danh sách chờ giao và DLV-02 tình trạng giao của giao dịch",
+      "discipline": "BE",
+      "description": "DLV-01 (ROLE-003 / 004 / 005): giao dịch 確定 / 再確定 còn phải giao, mặc định 待機中 / 引渡し中 mọi 業務日 (tồn qua ngày), lọc 業務日 / trạng thái / người mua / mã, kèm còn lại theo giá trị hiệu lực, cờ người mua hết hiệu lực hôm nay; đủ nhẹ để service worker làm mới 5 phút / lần. DLV-02 (thêm ROLE-011): tiến độ + mọi dòng giao (gồm 取消 / 返品) + ngoại lệ + cờ phiếu mở.",
+      "acceptance": [
+        "Giao dịch còn 60 của ngày D đã khóa vẫn có ở DLV-01 ngày D+1 (viewpoint No.4)",
+        "DLV-01 p95 ≤ 2 giây với dữ liệu năm 3",
+        "ROLE-011 gọi DLV-01 → 403, DLV-02 → 200",
+        "Vitest"
+      ],
+      "spec_refs": ["F-015", "F-016", "F-017", "DLV-01", "DLV-02", "FN-trade-sett_trade_effective", "DD-F016-multi-delivery-settlement"],
+      "hours": 8,
+      "hours_basis": "2 API đọc, 1 danh sách có mục tiêu hiệu năng, 1 chi tiết ghép 3 nguồn.",
+      "priority": "must",
+      "depends_on": ["E04-06", "E02-01", "E00-07", "E00-08"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E05-05",
+      "title": "Viết DLV-06 tra cứu dòng 精算 kèm lần giao (F-018)",
+      "discipline": "BE",
+      "description": "SELECT settlement_lines theo 業務日 / khoảng ≤ 93 ngày / giao dịch / người tham gia / 対象期間 / loại dòng (bắt buộc ≥ 1 điều kiện), join mã giao dịch, người tham gia, phiên bản quy tắc, lần giao gốc và các dòng 取消 / 返品 liên quan, dòng 修正 kèm trade_adjustment_id; meta.totals trên toàn bộ bộ lọc. Chỉ đọc cho ROLE-004 / 005 / 006 / 011.",
+      "acceptance": [
+        "Từ 1 dòng 精算 truy được lần giao gốc và phiên bản quy tắc (FR-AUDIT-03)",
+        "Tổng amount theo trade_id khớp Σ dòng sau hủy / 返品",
+        "Thiếu điều kiện → 400 M_01; target_period sai → M_04; ROLE-003 → 403",
+        "Vitest"
+      ],
+      "spec_refs": ["F-018", "DLV-06", "TBL-settlement_lines", "TBL-deliveries", "TBL-rule_versions"],
+      "hours": 8,
+      "hours_basis": "1 API đọc join 5 bảng, 6 bộ lọc, tổng phái sinh ngoài phân trang.",
+      "priority": "must",
+      "depends_on": ["E00-02e", "E00-07", "E00-08"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E05-06",
+      "title": "Viết job delivery_backlog_notice 09:00 JST nhắc giao hàng tồn đọng",
+      "discipline": "BE",
+      "description": "Hàm mở job_runs trước khối bắt lỗi; đọc threshold_value / is_enabled của delivery_backlog; chống gửi đôi trong cùng ngày JST; tập tồn = giao dịch 確定 / 再確定 còn 待機中 / 引渡し中 và biz_date ≤ hôm nay − ngưỡng, còn lại theo giá trị hiệu lực > 0; 1 thông báo gom tối đa 20 dòng + 「他 n件」; lỗi → job_runs 失敗 + notify job_failed, không raise. Đăng ký lịch pg_cron 0 0 * * *.",
+      "acceptance": [
+        "Ví dụ 2026-11-06 ngưỡng 1 → 2 giao dịch vào danh sách, giao dịch hôm nay không vào",
+        "Chạy lại cùng ngày → skipped already_sent; tắt cấu hình → skipped disabled",
+        "Lỗi giữa chừng → dòng job_runs 失敗 vẫn được commit",
+        "pgTAP"
+      ],
+      "spec_refs": ["F-015", "FN-delivery-delivery_backlog_notice", "FN-notification-notify_event", "TBL-job_runs", "TBL-notification_settings", "ADR-009"],
+      "hours": 8,
+      "hours_basis": "Job 3 nhánh kết thúc sớm + nhánh lỗi + dựng nội dung gom, theo khung job chung.",
+      "priority": "must",
+      "depends_on": ["E00-05", "E08-01", "E08-02", "E04-06"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E05-07",
+      "title": "Dựng màn SCR-018 danh sách chờ giao (tablet)",
+      "discipline": "FE",
+      "description": "Thẻ / bảng giao dịch chờ giao với trạng thái 待機中 / 引渡し中, còn lại, người mua + cờ hết hiệu lực, lọc nhanh; chạm mở SCR-019; vùng chạm ≥ 56 px; dữ liệu cache cho xem offline do E11 gắn vào.",
+      "acceptance": [
+        "Đủ cột / lọc theo SCR-018",
+        "Giao dịch tồn ngày trước hiển thị nhãn ngày",
+        "Kiểm axe AA, vùng chạm ≥ 56 px",
+        "Test component"
+      ],
+      "spec_refs": ["SCR-018", "DLV-01"],
+      "hours": 8,
+      "hours_basis": "Màn danh sách tablet có lọc và quy tắc hiển thị tồn đọng.",
+      "priority": "must",
+      "depends_on": ["E05-04", "E00-12a", "E00-12c"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E05-08",
+      "title": "Dựng màn SCR-019 ghi giao hàng nhiều lần (tablet, chế độ online)",
+      "discipline": "FE",
+      "description": "Màn tablet đeo găng của ROLE-004 (ROLE-003 / 005 chỉ xem). Phần offline (端末に保存, badge 送信待ち, số tạm tính) do E11 gắn vào.",
+      "acceptance": ["Mọi sub-issue xong; WCAG 2.1 AA cho luồng giao hàng (QA-007)"],
+      "spec_refs": ["SCR-019", "F-016"],
+      "hours": null,
+      "hours_basis": "Issue cha — giờ ở sub-issue.",
+      "priority": "must",
+      "depends_on": ["E05-04"],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E05-08a",
+          "title": "Dựng phần xem SCR-019: thông tin giao dịch, tiến độ, lịch sử giao, ngoại lệ",
+          "discipline": "FE",
+          "description": "Khối A (mã, trạng thái, người mua + hiệu lực, đơn giá, số lượng hiệu lực / đã giao / còn lại, thanh tiến độ), bảng lịch sử C (gồm 取消 / 返品, dòng bị hủy gạch 取消済, cờ ⚠ xác nhận / chưa xác nhận lúc đồng bộ), bảng ngoại lệ E từ DLV-02.",
+          "acceptance": [
+            "Số liệu khớp DLV-02 sau hủy / 返品",
+            "ROLE-003 / 005 không thấy form ghi",
+            "Test component"
+          ],
+          "spec_refs": ["SCR-019", "DLV-02"],
+          "hours": 8,
+          "hours_basis": "3 khối hiển thị, nhiều trạng thái dòng.",
+          "priority": "must",
+          "depends_on": ["E05-04", "E00-12a", "E00-12c"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E05-08b",
+          "title": "Dựng form ghi lần giao và hộp xác nhận cảnh báo người mua trên SCR-019",
+          "discipline": "FE",
+          "description": "Số lượng (bàn phím số, nút 残り全量), 便番号, 受渡先, 受取人, ghi chú, ảnh tùy chọn; mỗi lần gửi sinh Idempotency-Key + X-Occurred-At + X-Device-Id; 422 M_DLV_02 → hộp cảnh báo B-1 + checkbox B-2 → gửi lại với key mới + ack; M_DLV_01 → gợi ý ghi ngoại lệ (SCR-020); M_DLV_11 khi có phiếu mở.",
+          "acceptance": [
+            "Bấm 記録 nhanh 2 lần chỉ tạo 1 lần giao",
+            "Luồng cảnh báo → xác nhận → 201 chạy đúng",
+            "Validate khi rời ô cùng message ID server",
+            "Test component"
+          ],
+          "spec_refs": ["SCR-019", "DLV-03", "ATT-01", "ATT-02"],
+          "hours": 12,
+          "hours_basis": "Form 6 ô + tệp + hộp xác nhận 2 bước + sinh header phía client.",
+          "priority": "must",
+          "depends_on": ["E05-08a", "E05-01d", "E05-01b", "E00-12b", "E00-04d"],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E05-08c",
+          "title": "Dựng dialog hủy lần giao trên SCR-019",
+          "discipline": "FE",
+          "description": "Nút 取消 trên dòng 引渡し chưa bị đảo, chưa có 返品, ngày chưa khóa; dialog lý do 1〜500 → DLV-04, M_DLV_08; M_DLV_09 → hướng dẫn ghi 返品; offline → vô hiệu (M_COM_22).",
+          "acceptance": [
+            "Nút ẩn với dòng 取消 / 返品 / ngày 締め済",
+            "Test component"
+          ],
+          "spec_refs": ["SCR-019", "DLV-04"],
+          "hours": 4,
+          "hours_basis": "1 dialog + điều kiện hiện nút.",
+          "priority": "must",
+          "depends_on": ["E05-08a", "E05-02"],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E05-09",
+      "title": "Dựng màn SCR-020 ghi ngoại lệ giao hàng (tablet)",
+      "discipline": "FE",
+      "description": "Chọn loại 不足 / 超過 / 返品 / 一部取消, số lượng (giới hạn hiển thị theo loại), chọn lần giao cho 返品 (gồm lần giao ngày đã khóa), lý do, ảnh / chứng từ ≤ 5 tệp; sau 201 cho bổ sung tệp trong 24 giờ (ATT-02 chế độ B); 超過 / 一部取消 hiện hướng dẫn M_DLV_17 lập phiếu điều chỉnh; chỉ online.",
+      "acceptance": [
+        "返品 bắt buộc chọn lần giao; giới hạn số lượng hiện đúng 引渡済 / 残数量",
+        "Lỗi tải tệp không rollback ngoại lệ đã lưu",
+        "Kiểm axe AA, vùng chạm ≥ 56 px",
+        "Test component"
+      ],
+      "spec_refs": ["SCR-020", "DLV-02", "DLV-05", "ATT-01", "ATT-02"],
+      "hours": 12,
+      "hours_basis": "Form 4 loại có ràng buộc riêng + chọn lần giao + tải tệp 2 chế độ.",
+      "priority": "must",
+      "depends_on": ["E05-03", "E05-04", "E00-12a", "E00-12b", "E00-04d"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E05-10",
+      "title": "Xây bộ test vector giao nhiều lần ↔ dòng 精算",
+      "discipline": "QA",
+      "description": "Chuỗi trên cùng giao dịch: giao nhiều lần, hủy, 返品 sau ngày khóa, phiếu đổi đơn giá / người mua (E06) xen giữa, giao qua 2 tháng và qua ngày đổi phiên bản quy tắc; sau mỗi bước kiểm delivered_qty, delivery_status, trạng thái lô, Σ settlement_lines theo lần giao / người mua / target_period, rule_version_id theo ngày giao.",
+      "acceptance": [
+        "≥ 15 kịch bản, mỗi kịch bản ghi nguồn (F-016 AC, DD-F016 viewpoint, A-07, QA-008)",
+        "Σ 精算 theo lần giao bị hủy luôn = 0 cho mọi người mua",
+        "Chạy trong CI bằng pgTAP"
+      ],
+      "spec_refs": ["F-016", "F-017", "F-018", "DD-F016-multi-delivery-settlement", "FN-delivery-record_delivery", "FN-delivery-reverse_delivery", "FN-delivery-record_delivery_exception", "FN-correction-decide_correction"],
+      "hours": 8,
+      "hours_basis": "Chuỗi chạm 4 hàm ghi của 2 epic, dựng dữ liệu nhiều tháng / nhiều phiên bản quy tắc.",
+      "priority": "should",
+      "depends_on": ["E05-01b", "E05-02", "E05-03", "E06-10c", "E00-16"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E05-11",
+      "title": "Xây bộ test replay offline và tương tranh cho giao hàng",
+      "discipline": "QA",
+      "description": "Gọi DLV-03 với X-Sync-Replay: 2 tablet cùng giao dịch (sớm hơn thắng / không đủ chỗ), replay sau khi ngày đã 締め済, replay qua nửa đêm (biz_date theo X-Occurred-At), gửi lại cùng key khi timeout (2 request song song cùng key), ROLE-004 online + replay cùng lúc, ghi giao hàng song song với 試算 kỳ thưởng (khóa shared vs exclusive) và với lock_business_day.",
+      "acceptance": [
+        "Không âm delivered_qty, không có dòng giao ghi vào ngày 締め済",
+        "2 request cùng key chỉ 1 lần ghi",
+        "Không có dòng 精算 lọt qua mốc 試算 mà không bị chặn / thành delta",
+        "Chạy lặp 100 lần không deadlock"
+      ],
+      "spec_refs": ["F-016", "F-033", "DD-F016-multi-delivery-settlement", "DD-F033-offline-sync-replay", "ADR-003", "ADR-006", "FN-sync-sync_apply_operation"],
+      "hours": 8,
+      "hours_basis": "6 kịch bản tương tranh có điểm dừng, chạy lặp.",
+      "priority": "should",
+      "depends_on": ["E05-01c", "E05-01d", "E06-02", "E07-06c", "E00-16"],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E05-12",
+      "title": "Bổ sung event_type delivery_exception / sync_conflict vào CHECK và cấu hình thông báo",
+      "discipline": "DB",
+      "description": "Migration thêm 2 giá trị vào notification_settings_event_type_check và notifications_event_type_check, seed dòng notification_settings (Normal, ROLE-005; sync_conflict thêm ROLE-004). Thiếu bước này notify_event của record_delivery_exception / nhánh tự đảo sẽ vi phạm CHECK và rollback cả thao tác. Làm sau khi PL chốt sửa TBL-notification_settings (xem spec_gaps).",
+      "acceptance": [
+        "notify_event('delivery_exception') và ('sync_conflict') ghi được outbox",
+        "Seed chạy lại không trùng",
+        "pgTAP"
+      ],
+      "spec_refs": ["TBL-notification_settings", "TBL-notifications", "FN-delivery-record_delivery_exception", "FN-delivery-record_delivery", "DB-INITIAL-DATA"],
+      "hours": 2,
+      "hours_basis": "1 migration đổi CHECK + 2 dòng seed.",
+      "priority": "must",
+      "depends_on": ["E00-02g", "E08-02"],
+      "constraint": null,
+      "sub_issues": []
+    }
+  ],
+  "spec_not_issued": [
+    {"spec": "Hàng đợi IndexedDB, phần offline của SCR-018 / SCR-019, SCR-021, SYNC-01 / SYNC-02, sync_apply_operation / sync_record_rejection / sync_resolve, nhánh route ghi 要照合 khi replay bị từ chối, X-Resolves-Op-Id", "reason": "F-033 → E11. E05-01 gọi sync_apply_operation và nhận cờ replay; test replay ở E05-11 gọi thẳng DLV-03."},
+    {"spec": "Tải xuống / xem ảnh giao hàng và ngoại lệ (ATT-03)", "reason": "F-035 → E11."},
+    {"spec": "Phiếu điều chỉnh số lượng cho 不足 / 超過 / 一部取消, gán correction_request_id", "reason": "F-021 → E06 (submit_correction)."},
+    {"spec": "Mở tranh chấp từ ngoại lệ, gán dispute_id, hoàn tất có tranh chấp do ROLE-006", "reason": "F-022 → E06; API hoàn tất chưa có (xem spec_gaps)."},
+    {"spec": "Báo cáo tồn đọng giao hàng RPT 04, xuất kế toán từ settlement_lines", "reason": "F-028 / F-030 → E09."},
+    {"spec": "Chuyển dữ liệu giao hàng cũ (legacy_delivery_rows / legacy_settlement_rows), giao hàng dở dang lúc cutover", "reason": "F-036 → E11; chờ OQ-12."}
+  ],
+  "spec_gaps": [
+    {"spec": "DLV-03 Processing bước 4.1–4.2 vs FN-delivery-record_delivery bước 2–4 và FN README §2 No.5 (ADR-003)", "gap": "API ghi trades FOR UPDATE trước rồi mới business_days FOR SHARE — ngược thứ tự khóa chuẩn business_days → trades → lots; FN đúng thứ tự.", "proposal": "sửa thiết kế", "note": "E05-01a làm theo FN; sửa mục Processing của DLV-03."},
+    {"spec": "FN README §2 No.5 (1) vs FN record_delivery / reverse_delivery / record_delivery_exception vs E07-06c", "gap": "3 FN của E05 không có bước khóa shared incentive_period; E07-06c chỉ nói 「gọi trước khi ghi」 trong khi README đặt advisory lock nghiệp vụ ở bước (1), trước business_days.", "proposal": "sửa thiết kế", "note": "E05 gọi lock_incentive_period_shared ở bước (1) (target_period biết trước khi khóa: tháng của X-Occurred-At hoặc dòng gốc append-only); bổ sung bước vào 3 FN."},
+    {"spec": "DD-F016 §2 / DD-F033 vs DLV-03 / FN-delivery-record_delivery", "gap": "DD dùng header X-Queued: 1 để đánh dấu replay; API + FN dùng X-Sync-Replay: true (còn ghi 「đề xuất bổ sung common-conventions」).", "proposal": "sửa thiết kế", "note": "Chốt X-Sync-Replay; sửa DD-F016, DD-F033, common-conventions; báo owner E11."},
+    {"spec": "DLV-03 bước 4 vs FN-delivery-record_delivery Arguments", "gap": "Chữ ký khác nhau: API truyền p_payload + p_buyer_warning_ack (boolean) + p_resolves_op_id; FN nhận từng tham số, p_buyer_warning_ack_at (timestamptz từ client), p_attachments, không có resolves. DD-F016 lại ghi ack_at = now() phía server.", "proposal": "sửa thiết kế", "note": "Đề xuất theo FN nhưng ack_at = now() server (không tin giờ client) và thêm p_resolves_op_id cho E11; cập nhật DLV-03."},
+    {"spec": "DD-F016 §2 bảng lỗi vs FN-delivery-record_delivery / DLV-03", "gap": "Thiếu phiên bản quy tắc: DD M_INC_03, FN M_INC_82, API nói 「luôn có v1」. Giao dịch chưa 確定: DD 404 NOTFOUND, FN / API 422 M_DLV_51. Giờ thiết bị tương lai: DD 400 M_SYNC_05 ở route, FN BIZ M_SYNC_70.", "proposal": "sửa thiết kế", "note": "Làm theo FN (M_INC_82, M_DLV_51); route trả 400 M_SYNC_05 và FN giữ M_SYNC_70 làm lưới an toàn cho replay; sửa DD-F016."},
+    {"spec": "TBL-notification_settings CHECK vs FN record_delivery_exception / record_delivery", "gap": "event_type delivery_exception và sync_conflict chưa có trong CHECK; notify_event sẽ làm rollback cả thao tác giao hàng.", "proposal": "sửa thiết kế", "note": "Tạo E05-12; sửa TBL-notification_settings và initial-data."},
+    {"spec": "FN-delivery-delivery_backlog_notice bước 2.5 vs initial-data-and-migration-order", "gap": "FN ghi người nhận mặc định ROLE-005, ROLE-004; seed ghi ROLE-004, ROLE-005, ROLE-010.", "proposal": "giả định", "note": "Người nhận lấy từ cấu hình (seed là nguồn); sửa câu trong FN."},
+    {"spec": "DD-F016 §4.7 (F-017 ma trận)", "gap": "Ngoại lệ có tranh chấp cần ROLE-006 xác nhận hoàn tất nhưng không có API / hàm.", "proposal": "issue làm rõ", "note": "Đề xuất dùng dispute_resolve (E06-17) làm bước hoàn tất; nếu cần trạng thái riêng trên delivery_exceptions thì là bổ sung thiết kế."},
+    {"spec": "FN-delivery-record_delivery_exception mô tả đầu vs Arguments / DD-F016 §4", "gap": "Đoạn đầu nói tệp 「tải sau qua ATT-01 / ATT-02」, Arguments nhận p_attachments (chế độ A trong cùng request), DD chỉ nhắc ATT-02 chung.", "proposal": "sửa thiết kế", "note": "E05-03 nhận tệp chế độ A trong request + cho bổ sung chế độ B trong 24 giờ; thống nhất câu chữ."},
+    {"spec": "OQ-26 (căn cứ P / hóa đơn / kế toán)", "gap": "Chưa chốt dùng tổng floor theo từng lần giao hay tiền giao dịch lúc 確定; lệch vài yên.", "proposal": "để mở", "note": "Thiết kế hiện tại theo từng lần giao (QA-008); đổi thì ảnh hưởng E05-01a, E07, E09."},
+    {"spec": "OQ-17 (ảnh bắt buộc / lý do chuẩn của ngoại lệ)", "gap": "Chưa có câu trả lời của khách.", "proposal": "giả định", "note": "Ảnh không bắt buộc, lý do tự do; đổi thì chỉ thêm validation ở E05-03 / E05-09."}
+  ]
+}

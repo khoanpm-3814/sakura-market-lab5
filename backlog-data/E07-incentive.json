@@ -1,0 +1,1294 @@
+{
+  "epic": "E07",
+  "title": "完納奨励金 & 入金",
+  "f_ids": [
+    "F-023",
+    "F-024",
+    "F-025",
+    "F-041"
+  ],
+  "summary": "Hiện thực tính 完納奨励金 theo tháng (試算 → 確定), delta kỳ sau khi dữ liệu kỳ đã 確定 thay đổi, phiên bản quy tắc / bảng bậc có maker-checker, và đường nhập 入金 bằng CSV kèm hủy bằng dòng đảo. Công thức tách thành từng biến nghiệp vụ để test độc lập; mọi phép tiền dùng numeric, không float.",
+  "constraint": "完納奨励金",
+  "issues": [
+    {
+      "key": "E07-01",
+      "title": "Áp trigger bất biến và append-only cho bảng thưởng / 入金",
+      "discipline": "DB",
+      "description": "Viết migration riêng miền thưởng trên nền baseline E00-02: trigger chặn UPDATE / DELETE incentive_lines, incentive_line_parts, incentive_deltas khi kỳ liên quan đã 確定; trigger append-only của settlement_lines / payments chỉ cho đổi cột incentive_delta_id khi delta cũ thuộc kỳ áp dụng chưa 確定 (phục vụ re-試算). Thêm CHECK raw_amount scale 8, payments_shape_check, rule_rate_tiers chỉ sửa khi phiên bản 下書き.",
+      "acceptance": [
+        "UPDATE / DELETE incentive_lines của kỳ 確定 bị raise; kỳ 試算済 thì DELETE được",
+        "Gán lại incentive_delta_id trên settlement_lines / payments thành công khi kỳ áp delta còn 試算済, bị chặn khi kỳ đó 確定",
+        "UPDATE amount / paid_amount trên settlement_lines / payments luôn bị chặn",
+        "Sửa rule_rate_tiers của phiên bản 承認待ち / 承認済 / 発効 bị chặn",
+        "pgTAP phủ mọi trigger và CHECK nêu trên"
+      ],
+      "spec_refs": [
+        "TBL-incentive_periods",
+        "TBL-incentive_lines",
+        "TBL-incentive_line_parts",
+        "TBL-incentive_deltas",
+        "TBL-settlement_lines",
+        "TBL-payments",
+        "TBL-rule_rate_tiers",
+        "FN-incentive-record_incentive_delta",
+        "ADR-004",
+        "ADR-005"
+      ],
+      "hours": 8,
+      "hours_basis": "5 trigger + 3 CHECK, có 1 trigger điều kiện theo trạng thái kỳ của bảng khác (incentive_delta_id) cần test cả nhánh cho phép và nhánh chặn.",
+      "priority": "must",
+      "depends_on": [
+        "E00-02"
+      ],
+      "constraint": "完納奨励金",
+      "sub_issues": []
+    },
+    {
+      "key": "E07-02",
+      "title": "Viết incentive_period_ensure và quy tắc tính 支払期日 của kỳ",
+      "discipline": "BE",
+      "description": "Hàm incentive_period_ensure tạo dòng kỳ 未計算 idempotent (on conflict do nothing). Tách hàm tính 支払期日 của tháng M: lấy N = payment_due_day của phiên bản hiệu lực ngày cuối tháng M, ngày N của tháng M+1, tháng thiếu ngày N thì lấy ngày cuối tháng M+1. Dùng chung cho 試算, 確定, chế độ 追加入金.",
+      "acceptance": [
+        "Gọi 2 lần song song cùng tháng chỉ tạo 1 dòng, không lỗi",
+        "Định dạng YYYY-MM sai raise BIZ:M_04",
+        "N = 31, M = 2027-01 → 支払期日 2027-02-28 (AC-14); N = 10 → 2027-02-10",
+        "Ngày cuối tháng M không có phiên bản → trả NULL để hàm gọi raise M_INC_82"
+      ],
+      "spec_refs": [
+        "FN-incentive-incentive_period_ensure",
+        "FN-incentive-calculate_incentives",
+        "DD-F023-incentive-calculation-confirm",
+        "TBL-incentive_periods",
+        "TBL-rule_versions"
+      ],
+      "hours": 4,
+      "hours_basis": "2 hàm nhỏ, 1 nhánh biên cuối tháng và 1 nhánh tương tranh insert.",
+      "priority": "must",
+      "depends_on": [
+        "E07-01",
+        "E07-03"
+      ],
+      "constraint": "完納奨励金",
+      "sub_issues": []
+    },
+    {
+      "key": "E07-03",
+      "title": "Viết rule_version_for_date tra phiên bản quy tắc theo 業務日",
+      "discipline": "BE",
+      "description": "Hàm SQL stable trả id phiên bản 承認済 / 発効 có effective_from lớn nhất ≤ ngày D; loại 下書き / 承認待ち / 廃止; không có thì trả NULL (dừng an toàn, không dùng tỷ lệ mặc định). Kèm helper liệt kê các 業務日 không nghỉ của tháng không có phiên bản.",
+      "acceptance": [
+        "Ví dụ FN: D = 2027-02-15 → v1; D = 2027-02-16 → v2 dù job 発効 chưa chạy; D = 2026-03-31 → NULL",
+        "Bản 廃止 từng 承認済 không bao giờ được chọn",
+        "Helper trả đúng danh sách ngày thiếu phiên bản, bỏ ngày is_holiday"
+      ],
+      "spec_refs": [
+        "FN-rule-rule_version_for_date",
+        "TBL-rule_versions",
+        "TBL-business_days",
+        "ADR-005",
+        "ADR-009"
+      ],
+      "hours": 4,
+      "hours_basis": "1 truy vấn + 1 helper, 4 nhánh trạng thái phiên bản cần test.",
+      "priority": "must",
+      "depends_on": [
+        "E00-02"
+      ],
+      "constraint": "完納奨励金",
+      "sub_issues": []
+    },
+    {
+      "key": "E07-04",
+      "title": "Hiện thực incentive_compute theo từng biến nghiệp vụ",
+      "discipline": "BE",
+      "description": "Hàm stable không ghi, nguồn duy nhất của công thức 完納奨励金, dùng cho cả 試算 (mọi người tham gia) và delta (1 người tham gia của kỳ gốc). Chia thành 5 phần theo biến nghiệp vụ để mỗi phần có test vector riêng.",
+      "acceptance": [
+        "Mọi sub-issue xong và test vector trong FN-incentive-incentive_compute pass",
+        "Trả cột trùng tên TBL-incentive_lines + parts jsonb để insert thẳng"
+      ],
+      "spec_refs": [
+        "FN-incentive-incentive_compute",
+        "DD-F023-incentive-calculation-confirm"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — tổng giờ nằm ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E07-03"
+      ],
+      "constraint": "完納奨励金",
+      "sub_issues": [
+        {
+          "key": "E07-04a",
+          "title": "Gom P theo tháng giao dịch gốc (target_period)",
+          "discipline": "BE",
+          "description": "Tính P = Σ settlement_lines.amount theo (participant_id, target_period = M), gồm dòng 引渡し取消 / 返品 / 修正 mang dấu; dòng điều chỉnh mang tháng của lần giao gốc (A-07). Xác định tập người tham gia = có dòng 精算 hoặc có 入金 của M; hỗ trợ lọc 1 người tham gia.",
+          "acceptance": [
+            "AC-6: 72,000 + 63,000 + 45,000, hủy 63,000 → P = 117,000",
+            "Dòng 修正 của giao dịch tháng 01 duyệt trong tháng 02 vẫn cộng vào P tháng 01",
+            "Người tham gia chỉ có 入金 (không có 精算) vẫn có mặt trong tập, P = 0",
+            "Cộng bigint rồi đổi numeric trước khi nhân"
+          ],
+          "spec_refs": [
+            "FN-incentive-incentive_compute",
+            "TBL-settlement_lines",
+            "TBL-payments"
+          ],
+          "hours": 4,
+          "hours_basis": "1 truy vấn tổng hợp, 4 loại dòng có dấu và quy tắc tháng gốc A-07.",
+          "priority": "must",
+          "depends_on": [
+            "E07-03"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-04b",
+          "title": "Tách Pₖ theo phiên bản quy tắc của từng dòng 精算",
+          "discipline": "BE",
+          "description": "Nhóm dòng P theo settlement_lines.rule_version_id (phiên bản hiệu lực tại 業務日 của lần giao gốc), dựng mảng parts sắp theo effective_from tăng dần. Thiết kế không giới hạn số phần, thực tế tối đa 2 / tháng.",
+          "acceptance": [
+            "AC-5: 2027-03 có V1 2,000,000 và V2 1,500,000 → 2 phần đúng Pₖ",
+            "Người tham gia chỉ có 入金 → parts rỗng",
+            "Khóa jsonb của parts trùng tên cột TBL-incentive_line_parts"
+          ],
+          "spec_refs": [
+            "FN-incentive-incentive_compute",
+            "TBL-incentive_line_parts",
+            "TBL-settlement_lines",
+            "ADR-005"
+          ],
+          "hours": 4,
+          "hours_basis": "Nhóm theo khóa + dựng jsonb có thứ tự; ít nhánh nhưng phải đúng thứ tự phiên bản.",
+          "priority": "must",
+          "depends_on": [
+            "E07-04a"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-04c",
+          "title": "Chọn bậc tỷ lệ theo P tổng tháng cho từng phiên bản",
+          "discipline": "BE",
+          "description": "Với mỗi phần k chọn tier có min_amount lớn nhất ≤ P toàn tháng (không theo Pₖ) trong rule_rate_tiers của phiên bản k; dưới ngưỡng thấp nhất → rate 0, tier NULL. tier_no hiển thị ở dòng = tier của phiên bản có effective_from lớn nhất.",
+          "acceptance": [
+            "INC-EDGE-01: P = 1,000,000 → bậc 1; P = 999,999 → tier NULL, rate 0",
+            "AC-5: P = 3,500,000 → bậc 2 ở cả V1 và V2 dù từng Pₖ < 3,000,000",
+            "tier_no của dòng lấy từ phiên bản cuối tháng"
+          ],
+          "spec_refs": [
+            "FN-incentive-incentive_compute",
+            "TBL-rule_rate_tiers",
+            "TBL-incentive_lines"
+          ],
+          "hours": 4,
+          "hours_basis": "Tra bậc theo ngưỡng + nhánh dưới ngưỡng + chọn tier hiển thị khi 2 phiên bản.",
+          "priority": "must",
+          "depends_on": [
+            "E07-04b"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-04d",
+          "title": "Tính R 入金 đủ hạn và xét 完納",
+          "discipline": "BE",
+          "description": "R = Σ payments.paid_amount theo 対象期間 = M và paid_date ≤ 支払期日, gồm dòng 取消 (âm, giữ paid_date gốc); không có ân hạn. 完納 = R ≥ P và P > 0; 入金 sau hạn vẫn lưu nhưng không cộng.",
+          "acceptance": [
+            "AC-2: 入金 ngày 支払期日 + 1 → R = 0, không 完納",
+            "AC-3: R = P − 1 → không 完納",
+            "AC-7: 入金 対象期間 2026-12 nhận tháng 2027-02 không vào R của 2027-01",
+            "Dòng 取消 trừ đúng cửa sổ của dòng gốc",
+            "P = 0 và R > 0 → không 完納"
+          ],
+          "spec_refs": [
+            "FN-incentive-incentive_compute",
+            "TBL-payments",
+            "TBL-incentive_periods",
+            "DD-F041-payment-csv-import"
+          ],
+          "hours": 4,
+          "hours_basis": "1 tổng có điều kiện ngày + 1 biểu thức boolean, 5 biên cần test.",
+          "priority": "must",
+          "depends_on": [
+            "E07-04a",
+            "E07-02"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-04e",
+          "title": "Áp hệ số thuế 110/100 và làm tròn xuống 1 lần / người / tháng",
+          "discipline": "BE",
+          "description": "raw_k = Pₖ × rateₖ × 110 / 100 bằng numeric (scale 8, không làm tròn ngầm); thưởng = 完納 ? max(0, floor(Σ raw_k)) : 0. Hệ số 110/100 cố định theo BR-INC-01, không suy từ tax_category của giao dịch (A-05).",
+          "acceptance": [
+            "INC-EDGE-03: P = 1,234,567 rate 0.005 → 6,790",
+            "Làm tròn 1 lần: V1 1,234,567 + V2 135 → 6,791 (làm tròn từng phần ra 6,790 là sai)",
+            "rate 0.005123 → raw lưu đúng 6957.15541510, thưởng 6,957",
+            "Không 完納 vẫn trả parts đầy đủ, incentive_amount = 0",
+            "Không có kiểu float / double trong hàm (review + test)"
+          ],
+          "spec_refs": [
+            "FN-incentive-incentive_compute",
+            "TBL-incentive_line_parts",
+            "DD-F023-incentive-calculation-confirm"
+          ],
+          "hours": 4,
+          "hours_basis": "Phép tính ngắn nhưng nhạy độ chính xác; 5 test vector biên làm tròn.",
+          "priority": "must",
+          "depends_on": [
+            "E07-04c",
+            "E07-04d"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E07-05",
+      "title": "Hiện thực 試算 kỳ thưởng (calculate_incentives + INC-03)",
+      "discipline": "BE",
+      "description": "Chuyển kỳ 未計算 / 試算済 → 試算済, chạy lại được khi chưa 確定. Gồm guard điều kiện, ghi kết quả set-based và API route.",
+      "acceptance": [
+        "Mọi sub-issue xong; test viewpoint 8, 9, 11, 12 của DD-F023 pass"
+      ],
+      "spec_refs": [
+        "FN-incentive-calculate_incentives",
+        "INC-03",
+        "DD-F023-incentive-calculation-confirm"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — tổng giờ nằm ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E07-04"
+      ],
+      "constraint": "完納奨励金",
+      "sub_issues": [
+        {
+          "key": "E07-05a",
+          "title": "Viết guard điều kiện 試算 và thứ tự khóa kỳ",
+          "discipline": "BE",
+          "description": "Advisory lock incentive_period:M + incentive_periods FOR UPDATE, rồi kiểm theo thứ tự: kỳ 確定 (M_INC_83), kỳ trước chưa 確定 (M_INC_70), 業務日 thiếu phiên bản (M_INC_82 + danh sách ngày), chưa qua 支払期日 kể cả đúng ngày (M_INC_80), 業務日 chưa 締め済 hoặc chưa đăng ký (M_INC_81 + danh sách).",
+          "acceptance": [
+            "Mỗi guard có test raise đúng Message ID và detail JSON danh sách ngày",
+            "Chạy đúng ngày 支払期日 bị chặn (AC-9)",
+            "Ngày is_holiday bỏ qua khi kiểm khóa sổ / phiên bản",
+            "Lỗi ở guard không ghi gì (rollback)"
+          ],
+          "spec_refs": [
+            "FN-incentive-calculate_incentives",
+            "TBL-incentive_periods",
+            "TBL-business_days",
+            "DD-F023-incentive-calculation-confirm"
+          ],
+          "hours": 8,
+          "hours_basis": "5 guard có thứ tự cố định, 2 guard trả danh sách ngày, thêm thứ tự khóa advisory → row.",
+          "priority": "must",
+          "depends_on": [
+            "E07-02",
+            "E07-03"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-05b",
+          "title": "Ghi kết quả 試算 set-based và cập nhật kỳ",
+          "discipline": "BE",
+          "description": "Xóa lines / parts của lần 試算 trước, gọi record_incentive_delta, insert incentive_lines và incentive_line_parts bằng 1 câu insert … select mỗi bảng từ incentive_compute; cập nhật kỳ (status, payment_due_date, due_rule_version_id, calc_count + 1, last_calculated_at = now(), các tổng) và audit incentive.calculate là lệnh cuối. set local statement_timeout = 600s.",
+          "acceptance": [
+            "AC-10: 試算 → import → 試算 cho calc_count 2, 2 dòng audit, kết quả mới thay hết kết quả cũ",
+            "Tháng không có người tham gia vẫn 試算済 với số đếm 0",
+            "incentive_total = Σ incentive_amount; delta_total = Σ delta áp vào kỳ",
+            "EXPLAIN của câu insert không có vòng lặp theo người tham gia"
+          ],
+          "spec_refs": [
+            "FN-incentive-calculate_incentives",
+            "TBL-incentive_lines",
+            "TBL-incentive_line_parts",
+            "TBL-incentive_periods",
+            "FN-audit-audit_append"
+          ],
+          "hours": 8,
+          "hours_basis": "4 bước ghi trong 1 transaction, yêu cầu set-based để đạt mục tiêu hiệu năng AC-17.",
+          "priority": "must",
+          "depends_on": [
+            "E07-05a",
+            "E07-04e",
+            "E07-06a",
+            "E00-03"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-05c",
+          "title": "Dựng API route INC-03 POST /api/incentives/{period}/calculate",
+          "discipline": "BE",
+          "description": "Route Next.js: guard ROLE-005, kiểm định dạng period (400), gọi rpc, map BIZ → 422 qua jsonFromRpcError, ghi audit 拒否 khi bị từ chối; maxDuration 660 giây lớn hơn giới hạn DB.",
+          "acceptance": [
+            "ROLE-010 / ROLE-011 gọi → 403 (AC-15)",
+            "period 2027-13 → 400 M_04",
+            "Lỗi guard trả 422 kèm danh sách ngày trong body lỗi",
+            "Test Vitest cho route với rpc giả lập"
+          ],
+          "spec_refs": [
+            "INC-03",
+            "FN-common-requireApiUser",
+            "FN-common-jsonFromRpcError",
+            "FN-common-writeAuditLog"
+          ],
+          "hours": 4,
+          "hours_basis": "Route mỏng theo mẫu chung, thêm cấu hình maxDuration.",
+          "priority": "must",
+          "depends_on": [
+            "E07-05b",
+            "E00-01"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E07-06",
+      "title": "Hiện thực delta kỳ sau cho kỳ đã 確定 (F-024)",
+      "discipline": "BE",
+      "description": "Dữ liệu đến sau khi kỳ gốc 確定 (修正, 引渡し取消, 返品, 追加入金) được tính lại bằng incentive_compute và ghi chênh lệch vào kỳ mở kế tiếp; kỳ gốc không bao giờ đổi.",
+      "acceptance": [
+        "Mọi sub-issue xong; test vector INC-EDGE-02 pass"
+      ],
+      "spec_refs": [
+        "FN-incentive-record_incentive_delta",
+        "INC-05",
+        "TBL-incentive_deltas",
+        "DD-F023-incentive-calculation-confirm"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — tổng giờ nằm ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E07-04"
+      ],
+      "constraint": "完納奨励金",
+      "sub_issues": [
+        {
+          "key": "E07-06a",
+          "title": "Viết record_incentive_delta: chọn nguồn, tính before / after, ghi delta",
+          "discipline": "BE",
+          "description": "Gỡ delta cũ của kỳ đang 試算 (re-試算), lấy ứng viên (participant, kỳ gốc 確定) có dòng 精算 / 入金 đến sau last_calculated_at của kỳ gốc và chưa có incentive_delta_id; before = kết quả 確定 + Σ delta trước, after = incentive_compute(kỳ gốc, 支払期日 đã lưu, participant); insert delta (kể cả delta = 0) và gán incentive_delta_id cho dòng nguồn.",
+          "acceptance": [
+            "INC-EDGE-02: phiếu giảm giá tháng 01 → delta 修正 −190 ghi vào kỳ 02, kỳ 01 không đổi",
+            "追加入金 1,000 làm 完納 → delta +11,000 cause 入金",
+            "Re-試算 kỳ 02 xóa và tạo lại delta giống hệt (idempotent)",
+            "Delta lần 2 của cùng (participant, kỳ gốc) lấy before từ delta trước",
+            "Hàm raise khi kỳ nhận delta đã 確定"
+          ],
+          "spec_refs": [
+            "FN-incentive-record_incentive_delta",
+            "FN-incentive-incentive_compute",
+            "TBL-incentive_deltas",
+            "TBL-settlement_lines",
+            "TBL-payments"
+          ],
+          "hours": 12,
+          "hours_basis": "Nhiều bước đọc / ghi chéo 4 bảng, xử lý re-試算 gỡ / gán lại và chuỗi delta nhiều lần cho cùng kỳ gốc.",
+          "priority": "must",
+          "depends_on": [
+            "E07-01",
+            "E07-04e"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-06b",
+          "title": "Xác định cause_type và cause_note của delta",
+          "discipline": "BE",
+          "description": "Chọn cause_type theo ưu tiên 修正 > 引渡し取消 > 返品 > 入金 khi một delta gom nhiều loại dòng; dựng cause_note từ request_no (qua trade_adjustments → correction_requests), trade_no, accounting_ref; vượt 500 ký tự thì cắt và thêm 「 他{n}件」.",
+          "acceptance": [
+            "Delta có cả dòng 修正 và 入金 → cause_type 修正",
+            "cause_note chứa request_no của phiếu đã duyệt",
+            "Danh sách dài → đúng 500 ký tự kết thúc bằng 他{n}件"
+          ],
+          "spec_refs": [
+            "FN-incentive-record_incentive_delta",
+            "TBL-incentive_deltas",
+            "TBL-trade_adjustments",
+            "TBL-correction_requests"
+          ],
+          "hours": 4,
+          "hours_basis": "1 bảng ưu tiên + 3 join lấy mã chứng từ + cắt chuỗi.",
+          "priority": "must",
+          "depends_on": [
+            "E07-06a"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-06c",
+          "title": "Viết helper khóa shared incentive_period cho hàm ghi 精算 / 入金",
+          "discipline": "BE",
+          "description": "Helper lock_incentive_period_shared(target_period) lấy pg_advisory_xact_lock_shared theo khóa incentive_period:YYYY-MM; mọi hàm ghi settlement_lines / payments (record_delivery, reverse_delivery, record_delivery_exception, decide_correction ở E05 / E06; import / reverse 入金 ở E07) gọi trước khi ghi để 試算 / 確定 (exclusive) không bỏ sót dòng.",
+          "acceptance": [
+            "Test 2 session: 試算 đang giữ khóa thì hàm ghi 精算 cùng tháng chờ, không chen vào giữa",
+            "Nhiều hàm ghi cùng tháng chạy song song được (shared)",
+            "Tài liệu hợp đồng gọi helper gửi cho owner E05 / E06"
+          ],
+          "spec_refs": [
+            "FN-incentive-record_incentive_delta",
+            "FN-incentive-confirm_incentives",
+            "ADR-003"
+          ],
+          "hours": 4,
+          "hours_basis": "Helper ngắn, phần lớn công sức ở test tương tranh 2 session.",
+          "priority": "must",
+          "depends_on": [
+            "E00-02"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-06d",
+          "title": "Dựng API INC-05 GET /api/incentives/{period}/deltas",
+          "discipline": "BE",
+          "description": "Trả delta có applied_period = kỳ: participant, kỳ gốc, cause_type, cause_note, before / after, delta_amount; ROLE-005 / ROLE-011 xem.",
+          "acceptance": [
+            "ROLE-010 gọi → 403 theo danh sách vai trò API",
+            "Kỳ không có delta → mảng rỗng, tổng 0"
+          ],
+          "spec_refs": [
+            "INC-05",
+            "TBL-incentive_deltas"
+          ],
+          "hours": 2,
+          "hours_basis": "Một API đọc có lọc + phân quyền, giống các API đọc khác (chỉnh sau đối chiếu giờ/SWP)",
+          "priority": "must",
+          "depends_on": [
+            "E07-06a",
+            "E00-01"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E07-07",
+      "title": "Hiện thực 確定 kỳ thưởng (confirm_incentives + INC-04)",
+      "discipline": "BE",
+      "description": "Chuyển 試算済 → 確定 không quay lại; chặn khi dữ liệu đã đổi sau lần 試算 cuối để không mất thay đổi.",
+      "acceptance": [
+        "Mọi sub-issue xong; test viewpoint 16, 17 DD-F023 pass"
+      ],
+      "spec_refs": [
+        "FN-incentive-confirm_incentives",
+        "INC-04"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — tổng giờ nằm ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E07-05"
+      ],
+      "constraint": "完納奨励金",
+      "sub_issues": [
+        {
+          "key": "E07-07a",
+          "title": "Viết confirm_incentives với guard dữ liệu đổi sau 試算",
+          "discipline": "BE",
+          "description": "Cùng khóa với 試算; kiểm 未計算 (M_INC_85), 確定 (M_INC_83), chưa qua 支払期日 (M_INC_80), ngày bị mở khóa (M_INC_81), 入金 import / 取消 sau last_calculated_at (M_INC_84), dòng 精算 mới hoặc nguồn delta chưa tiêu thụ (M_INC_51); rồi set 確定 + audit incentive.confirm, trả payout_total = incentive_total + delta_total.",
+          "acceptance": [
+            "Mỗi guard có test riêng",
+            "Hai người bấm 確定 cùng lúc → người sau nhận M_INC_83",
+            "Sau 確定 import 通常 vào kỳ bị chặn, dòng 精算 mới thành nguồn delta kỳ sau",
+            "Trigger E07-01 chặn sửa kết quả sau 確定"
+          ],
+          "spec_refs": [
+            "FN-incentive-confirm_incentives",
+            "TBL-incentive_periods",
+            "TBL-payments",
+            "TBL-settlement_lines",
+            "FN-audit-audit_append"
+          ],
+          "hours": 8,
+          "hours_basis": "6 guard, 2 guard so mốc thời gian trên 2 bảng nguồn; tương tranh với 試算.",
+          "priority": "must",
+          "depends_on": [
+            "E07-05b",
+            "E07-06c"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-07b",
+          "title": "Dựng API route INC-04 POST /api/incentives/{period}/confirm",
+          "discipline": "BE",
+          "description": "Guard ROLE-005, nhận updated_at của kỳ để chặn ghi đè (409 M_COM_17), gọi rpc, map lỗi, audit 拒否.",
+          "acceptance": [
+            "updated_at lệch → 409",
+            "Thành công trả status 確定, confirmed_at, payout_total"
+          ],
+          "spec_refs": [
+            "INC-04",
+            "FN-common-jsonFromRpcError"
+          ],
+          "hours": 2,
+          "hours_basis": "Route mỏng theo mẫu chung.",
+          "priority": "must",
+          "depends_on": [
+            "E07-07a"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E07-08",
+      "title": "Dựng API xem kỳ và chi tiết thưởng INC-01 / INC-02",
+      "discipline": "BE",
+      "description": "INC-01 trả 1 dòng / 対象期間 (未計算 / 試算済 / 確定, phiên bản dùng cho 支払期日, tổng); tháng chưa có dòng hiển thị 未計算. INC-02 trả người tham gia × tháng: P, 支払期日, R, 完納, bậc, các phần theo phiên bản (Pₖ, rate, raw) và thưởng; lọc theo participant.",
+      "acceptance": [
+        "ROLE-005 / ROLE-010 / ROLE-011 xem được; ROLE-001 → 403 (AC-15)",
+        "Người không 完納 vẫn thấy parts để giải thích",
+        "Không log số tiền theo người tham gia"
+      ],
+      "spec_refs": [
+        "INC-01",
+        "INC-02",
+        "TBL-incentive_periods",
+        "TBL-incentive_lines",
+        "TBL-incentive_line_parts",
+        "DD-F023-incentive-calculation-confirm"
+      ],
+      "hours": 8,
+      "hours_basis": "2 API đọc, INC-02 join 4 bảng có phân trang và lọc.",
+      "priority": "must",
+      "depends_on": [
+        "E07-05b"
+      ],
+      "constraint": "完納奨励金",
+      "sub_issues": []
+    },
+    {
+      "key": "E07-09",
+      "title": "Hiện thực import CSV 入金 (PAY-01 + import_payments)",
+      "discipline": "BE",
+      "description": "Nhập 入金 bằng file CSV kế toán xuất (không kết nối ngân hàng, QA-011): toàn file hoặc không gì cả, lỗi theo dòng, 2 chế độ 通常 / 追加入金（確定済み期間）.",
+      "acceptance": [
+        "Mọi sub-issue xong; test viewpoint 1〜11, 14〜16 DD-F041 pass"
+      ],
+      "spec_refs": [
+        "PAY-01",
+        "FN-payment-import_payments",
+        "DD-F041-payment-csv-import"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — tổng giờ nằm ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E07-02"
+      ],
+      "constraint": "完納奨励金",
+      "sub_issues": [
+        {
+          "key": "E07-09a",
+          "title": "Dựng route PAY-01: nhận multipart, kiểm file, parse CSV",
+          "discipline": "BE",
+          "description": "Guard ROLE-005; kiểm có file, ≤ 10 MB, UTF-8 (bỏ BOM), dòng tiêu đề 5 cột, CRLF / LF, ≤ 10,000 dòng; tính SHA-256 trên byte gốc; chuyển nguyên văn từng ô sang rpc; kiểm import_mode / import_reason; cờ dry_run; lưu file gốc vào attachments 文書7年; map kết quả → 201 / 200 / 422 kèm error_extra.rows.",
+          "acceptance": [
+            "10,000 dòng OK, 10,001 dòng → 400",
+            "Sai dòng tiêu đề / không phải UTF-8 → 400",
+            "追加入金 thiếu lý do / 通常 có lý do → 400",
+            "Không log nội dung file, chỉ rows / sha / mode"
+          ],
+          "spec_refs": [
+            "PAY-01",
+            "DD-F041-payment-csv-import",
+            "FN-payment-import_payments",
+            "TBL-attachments"
+          ],
+          "hours": 8,
+          "hours_basis": "Parse multipart + CSV, 6 kiểm mức file, xử lý encoding / BOM, lưu tệp.",
+          "priority": "must",
+          "depends_on": [
+            "E00-01",
+            "E00-04"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-09b",
+          "title": "Viết import_payments: kiểm từng dòng gom lỗi và batch エラー",
+          "discipline": "BE",
+          "description": "Kiểm mức file (0 dòng, > 10,000, chế độ, lý do); kiểm từng dòng không dừng ở lỗi đầu: ô rỗng / sai định dạng (M_PAY_85), mã người tham gia (M_PAY_81), ngày tương lai (M_PAY_84), số tiền, accounting_ref trùng trong file hoặc đã có (M_PAY_83), người tham gia không có 精算 của tháng (M_PAY_71); giữ tối đa 1,000 lỗi. Có lỗi → ghi batch エラー + audit 拒否, không ghi dòng 入金.",
+          "acceptance": [
+            "100 dòng, dòng 57 mã sai → 0 dòng payments, batch エラー, rows = [57]",
+            "Import lại file cũ → mọi dòng M_PAY_83",
+            "Một dòng có nhiều lỗi được liệt kê đủ",
+            "dry_run không ghi gì kể cả batch lỗi"
+          ],
+          "spec_refs": [
+            "FN-payment-import_payments",
+            "TBL-payment_import_batches",
+            "TBL-payments",
+            "FN-common-next_business_no"
+          ],
+          "hours": 12,
+          "hours_basis": "7 luật kiểm theo dòng có gom lỗi, đường batch lỗi commit riêng và dry_run.",
+          "priority": "must",
+          "depends_on": [
+            "E07-01",
+            "E07-06c"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-09c",
+          "title": "Hiện thực chế độ 通常 / 追加入金（確定済み期間） và ghi batch 取込済",
+          "discipline": "BE",
+          "description": "通常: kỳ 確定 → M_PAY_82. 追加入金 (A-06): chỉ kỳ 確定 và paid_date ≤ payment_due_date của kỳ, ngược lại M_PAY_87. Hợp lệ → batch 取込済 mã P-YYYYMMDD-nnnnn, insert payments set-based; unique_violation do import song song → M_PAY_83 rollback cả file; cảnh báo M_PAY_72 (file trùng sha) và M_INC_84 (kỳ đang 試算済); audit payment.import.",
+          "acceptance": [
+            "追加入金 trong hạn vào kỳ 確定 → 201, kỳ gốc không đổi, dòng thành nguồn delta 入金",
+            "追加入金 trễ 1 ngày → M_PAY_87",
+            "Import vào kỳ 試算済 → 201 kèm cảnh báo, INC-04 sau đó bị chặn M_INC_84",
+            "Hai import song song cùng accounting_ref → 1 thành công, 1 lỗi M_PAY_83"
+          ],
+          "spec_refs": [
+            "FN-payment-import_payments",
+            "TBL-payment_import_batches",
+            "TBL-payments",
+            "TBL-incentive_periods"
+          ],
+          "hours": 8,
+          "hours_basis": "Ma trận 2 chế độ × 3 trạng thái kỳ, ghi set-based và xử lý vi phạm UK khi tương tranh.",
+          "priority": "must",
+          "depends_on": [
+            "E07-09b"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E07-10",
+      "title": "Hiện thực hủy 入金 bằng dòng đảo (reverse_payment + PAY-04)",
+      "discipline": "BE",
+      "description": "Chèn dòng 取消 âm giữ paid_date gốc; dòng batch 通常 chỉ hủy khi kỳ chưa 確定 (M_PAY_88); dòng batch 追加入金 hủy được khi kỳ đang chứa delta của nó chưa 確定; hủy 2 lần → M_PAY_89. Route PAY-04 bắt buộc lý do ≤ 500.",
+      "acceptance": [
+        "AC-13: kỳ chưa 確定 → dòng 取消 âm, dòng gốc vẫn xem được",
+        "Kỳ 確定 (dòng 通常) → 422 M_PAY_88",
+        "Hai người hủy cùng lúc → 1 thành công, 1 M_PAY_89",
+        "Trả recalc_required = true khi kỳ đang 試算済"
+      ],
+      "spec_refs": [
+        "FN-payment-reverse_payment",
+        "PAY-04",
+        "TBL-payments",
+        "DD-F041-payment-csv-import"
+      ],
+      "hours": 8,
+      "hours_basis": "2 nhánh theo chế độ batch, khóa thêm kỳ chứa delta, tương tranh UK reversal_of_id, kèm route.",
+      "priority": "must",
+      "depends_on": [
+        "E07-09c",
+        "E07-06c"
+      ],
+      "constraint": "完納奨励金",
+      "sub_issues": []
+    },
+    {
+      "key": "E07-11",
+      "title": "Dựng API lịch sử import và 入金明細 PAY-02 / PAY-03",
+      "discipline": "BE",
+      "description": "PAY-02 trả batch import (file, số dòng, tổng, số lỗi, errors, người chạy, chế độ) có phân trang. PAY-03 trả dòng 入金 + 取消 theo 対象期間 / người tham gia kèm cờ 期限内 (paid_date ≤ payment_due_date).",
+      "acceptance": [
+        "ROLE-005 / ROLE-011 xem; vai trò khác → 403",
+        "Cờ 期限内 đúng với 支払期日 đã lưu của kỳ; kỳ 未計算 trả cờ null"
+      ],
+      "spec_refs": [
+        "PAY-02",
+        "PAY-03",
+        "TBL-payment_import_batches",
+        "TBL-payments"
+      ],
+      "hours": 4,
+      "hours_basis": "2 API đọc đơn bảng có lọc / phân trang.",
+      "priority": "must",
+      "depends_on": [
+        "E07-09c"
+      ],
+      "constraint": "完納奨励金",
+      "sub_issues": []
+    },
+    {
+      "key": "E07-12",
+      "title": "Hiện thực vòng đời phiên bản quy tắc maker-checker (F-025)",
+      "discipline": "BE",
+      "description": "Soạn → gửi duyệt → 承認 / 差戻し → job 発効, rollback tạo bản mới, 廃止; giới hạn 4 lần / năm, soạn ≠ duyệt, 発効日 luôn ở tương lai để không đổi dữ liệu đã khóa.",
+      "acceptance": [
+        "Mọi sub-issue xong; test viewpoint DD-F025 pass (trừ phần đã chuyển sang RUL-08)"
+      ],
+      "spec_refs": [
+        "DD-F025-rule-version-lifecycle",
+        "ADR-005",
+        "RUL-01",
+        "RUL-08"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — tổng giờ nằm ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E07-01"
+      ],
+      "constraint": "完納奨励金",
+      "sub_issues": [
+        {
+          "key": "E07-12a",
+          "title": "Viết rule_version_save và route RUL-03 / RUL-04",
+          "discipline": "BE",
+          "description": "Tạo / sửa bản 下書き: cấp nhãn vN dưới advisory lock rule_version_no, kiểm bảng bậc (tier_no liên tục từ 1, min_amount tăng dần → M_RUL_06, 0 ≤ rate < 1 tối đa 6 chữ số), payment_due_day 1〜31, 発効日 > hôm nay (M_RUL_01); RUL-04 xóa + chèn lại bậc, updated_at lệch → 409. Guard ROLE-007 + AAL2.",
+          "acceptance": [
+            "ROLE-007 phiên AAL1 → 401 M_COM_06",
+            "Bậc giảm dần → 400 M_RUL_06; rate 1.0 → 400",
+            "Sửa bản 承認待ち → 409",
+            "Hai bản tạo đồng thời không trùng nhãn vN"
+          ],
+          "spec_refs": [
+            "FN-rule-rule_version_save",
+            "RUL-03",
+            "RUL-04",
+            "TBL-rule_versions",
+            "TBL-rule_rate_tiers"
+          ],
+          "hours": 8,
+          "hours_basis": "Kiểm mảng bậc nhiều luật, 2 route, khóa cấp nhãn và AAL2.",
+          "priority": "must",
+          "depends_on": [
+            "E07-01",
+            "E00-01"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-12b",
+          "title": "Viết rule_version_submit và route RUL-05",
+          "discipline": "BE",
+          "description": "下書き → 承認待ち khi có ≥ 1 bậc (M_RUL_05) và 発効日 > hôm nay; updated_at lệch → 409; audit rule_version.submit.",
+          "acceptance": [
+            "Bản không có bậc → 422 M_RUL_05",
+            "Bản 承認待ち hiện trong danh sách lọc của ROLE-008"
+          ],
+          "spec_refs": [
+            "FN-rule-rule_version_submit",
+            "RUL-05"
+          ],
+          "hours": 4,
+          "hours_basis": "Chuyển trạng thái đơn, 3 kiểm.",
+          "priority": "must",
+          "depends_on": [
+            "E07-12a"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-12c",
+          "title": "Viết rule_version_decide và route RUL-06 (承認 / 差戻し)",
+          "discipline": "BE",
+          "description": "Advisory lock theo năm của 発効日 → FOR UPDATE; kiểm người duyệt ≠ người soạn (M_RUL_03), 発効日 đã qua khi chờ (M_RUL_01), đã đủ 4 bản 承認済 / 発効 trong năm không tính v1 (M_RUL_02), trùng 発効日 (M_RUL_04); 差戻し bắt buộc ghi chú, về 下書き. Guard ROLE-008 + AAL2.",
+          "acceptance": [
+            "Người soạn có cả ROLE-008 tự duyệt → 422 M_RUL_03",
+            "Bản thứ 5 trong năm → M_RUL_02; bản thứ 4 → OK",
+            "Hai duyệt đồng thời không vượt hạn mức nhờ advisory lock năm"
+          ],
+          "spec_refs": [
+            "FN-rule-rule_version_decide",
+            "RUL-06",
+            "TBL-rule_versions",
+            "DD-F025-rule-version-lifecycle"
+          ],
+          "hours": 8,
+          "hours_basis": "4 luật governance + đếm có khóa tuần tự hóa theo năm, 2 nhánh quyết định.",
+          "priority": "must",
+          "depends_on": [
+            "E07-12b"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-12d",
+          "title": "Viết rule_version_rollback và route RUL-07",
+          "discipline": "BE",
+          "description": "Chỉ từ bản 発効 (M_RUL_15): tạo bản mới 下書き sao chép bậc + N, based_on_version_id = bản gốc, 発効日 mới > hôm nay và > ngày 締め済 cuối (M_RUL_01), không trùng 発効日 đã duyệt (M_RUL_04). Người tạo ROLE-007 là maker; không sửa bản cũ.",
+          "acceptance": [
+            "Rollback từ bản 承認済 → M_RUL_15",
+            "Bản mới copy đúng bậc, trạng thái 下書き, audit rule_version.rollback_create",
+            "Bản rollback tính vào hạn mức 4 lần khi duyệt"
+          ],
+          "spec_refs": [
+            "FN-rule-rule_version_rollback",
+            "RUL-07",
+            "TBL-rule_versions",
+            "TBL-rule_rate_tiers"
+          ],
+          "hours": 4,
+          "hours_basis": "Sao chép bậc + 3 kiểm ngày, 1 nhánh trạng thái.",
+          "priority": "must",
+          "depends_on": [
+            "E07-12a"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-12e",
+          "title": "Viết rule_version_cancel và route RUL-08 (廃止)",
+          "discipline": "BE",
+          "description": "下書き / 承認待ち: chỉ người soạn ROLE-007; 承認済 chưa tới 発効日: ROLE-008 (M_RUL_51 nếu đã tới ngày); 発効 → M_RUL_85; 廃止 → 409. Ghi cancelled_by / at / reason, giải phóng suất hạn mức năm.",
+          "acceptance": [
+            "ROLE-007 khác người soạn hủy → 403 M_19",
+            "ROLE-008 hủy bản 承認済 đúng ngày 発効日 → M_RUL_51",
+            "Sau hủy bản 承認済, duyệt thêm 1 bản trong năm được"
+          ],
+          "spec_refs": [
+            "FN-rule-rule_version_cancel",
+            "RUL-08",
+            "TBL-rule_versions"
+          ],
+          "hours": 4,
+          "hours_basis": "Ma trận 4 trạng thái × 2 vai trò, quyền theo dữ liệu (FORBIDDEN).",
+          "priority": "must",
+          "depends_on": [
+            "E07-12c"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-12f",
+          "title": "Viết job rule_version_activation 02:00 JST",
+          "discipline": "BE",
+          "description": "Trong khung job pg_cron chung: bản 承認済 có effective_from ≤ hôm nay → 発効, audit rule_version.activate (user NULL), ghi job_runs; idempotent. Chỉ đổi hiển thị — phép tính đã tra theo ngày.",
+          "acceptance": [
+            "Chạy 2 lần cùng ngày không đổi thêm gì",
+            "Job lỗi → job_runs 失敗 và cảnh báo vận hành",
+            "試算 trước khi job chạy vẫn dùng bản mới (test cùng E07-03)"
+          ],
+          "spec_refs": [
+            "FN-rule-rule_version_activation",
+            "TBL-job_runs",
+            "ADR-009"
+          ],
+          "hours": 4,
+          "hours_basis": "1 câu update trong khung job có sẵn, kèm đăng ký lịch.",
+          "priority": "must",
+          "depends_on": [
+            "E00-05",
+            "E07-12c"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-12g",
+          "title": "Dựng API danh sách / chi tiết phiên bản RUL-01 / RUL-02",
+          "discipline": "BE",
+          "description": "RUL-01 lọc năm / trạng thái, kèm số lần thay đổi trong năm (/ 4). RUL-02 trả bậc, N, 発効日, người soạn / duyệt, so sánh với bản hiện hành (rule_version_for_date hôm nay). ROLE-005 / ROLE-011 chỉ xem.",
+          "acceptance": [
+            "Đếm năm không tính v1",
+            "So sánh hiển thị bậc thêm / bớt / đổi tỷ lệ"
+          ],
+          "spec_refs": [
+            "RUL-01",
+            "RUL-02",
+            "FN-rule-rule_version_for_date"
+          ],
+          "hours": 4,
+          "hours_basis": "2 API đọc, 1 phép so sánh bảng bậc.",
+          "priority": "must",
+          "depends_on": [
+            "E07-03",
+            "E07-12a"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E07-13",
+      "title": "Dựng màn FG-07 (入金取込, kỳ thưởng, chi tiết thưởng, quy tắc)",
+      "discipline": "FE",
+      "description": "5 màn PC tiếng Nhật nối API của E07, theo khung UI chung E00.",
+      "acceptance": [
+        "Mọi sub-issue xong, điều hướng theo vai trò đúng screen list"
+      ],
+      "spec_refs": [
+        "SCR-027",
+        "SCR-028",
+        "SCR-029",
+        "SCR-030",
+        "SCR-031"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — tổng giờ nằm ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E00-01"
+      ],
+      "constraint": "完納奨励金",
+      "sub_issues": [
+        {
+          "key": "E07-13a",
+          "title": "Dựng màn SCR-027 入金取込",
+          "discipline": "FE",
+          "description": "Chọn file, chế độ 通常 / 追加入金 (bắt buộc lý do), nút 検証のみ (dry_run) và 取込; bảng lỗi theo dòng; tab lịch sử import (PAY-02); danh sách 入金 theo kỳ / người tham gia có hủy kèm lý do (PAY-03 / PAY-04).",
+          "acceptance": [
+            "Lỗi 422 hiển thị đủ danh sách dòng lỗi, không mất file đã chọn",
+            "Chế độ 追加入金 hiện cảnh báo kỳ đã 確定 và ô lý do bắt buộc",
+            "Cảnh báo M_PAY_72 / M_INC_84 hiển thị sau import thành công",
+            "ROLE-011 chỉ thấy tab xem"
+          ],
+          "spec_refs": [
+            "SCR-027",
+            "PAY-01",
+            "PAY-02",
+            "PAY-03",
+            "PAY-04"
+          ],
+          "hours": 12,
+          "hours_basis": "Màn nhiều trạng thái (upload, dry_run, lỗi dòng, lịch sử, hủy), 4 API.",
+          "priority": "must",
+          "depends_on": [
+            "E07-09a",
+            "E07-10",
+            "E07-11"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-13b",
+          "title": "Dựng màn SCR-028 奨励金期一覧 (試算 / 確定)",
+          "discipline": "FE",
+          "description": "Danh sách kỳ với trạng thái, phiên bản, tổng thưởng + delta; nút 試算 (chờ tối đa 5 phút rồi báo M_INC_15) và 確定 (dialog hiện tổng + số người); lỗi guard hiển thị danh sách ngày chưa khóa / thiếu phiên bản.",
+          "acceptance": [
+            "Nút 確定 chỉ bật khi 試算済",
+            "Timeout client sau 5 phút hiện M_INC_15, tải lại thấy kết quả khi server xong",
+            "ROLE-010 / ROLE-011 không thấy nút thao tác"
+          ],
+          "spec_refs": [
+            "SCR-028",
+            "INC-01",
+            "INC-03",
+            "INC-04",
+            "INC-05"
+          ],
+          "hours": 8,
+          "hours_basis": "Danh sách + 2 hành động dài có dialog và xử lý timeout.",
+          "priority": "must",
+          "depends_on": [
+            "E07-05c",
+            "E07-07b",
+            "E07-08"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-13c",
+          "title": "Dựng màn SCR-029 奨励金明細 (người tham gia × tháng)",
+          "discipline": "FE",
+          "description": "Bảng P, 支払期日, R, 完納, bậc, thưởng; mở rộng dòng xem các phần theo phiên bản (Pₖ, rate, raw); khối delta ghi vào kỳ kèm nguồn; link sang 入金明細 và dòng 精算.",
+          "acceptance": [
+            "Tháng 2 phiên bản hiển thị 2 phần và tổng thưởng khớp INC-02",
+            "Delta hiển thị cause_type + cause_note"
+          ],
+          "spec_refs": [
+            "SCR-029",
+            "INC-02",
+            "INC-05",
+            "PAY-03",
+            "DLV-06"
+          ],
+          "hours": 8,
+          "hours_basis": "Bảng lồng 2 cấp + khối delta + 2 link điều hướng.",
+          "priority": "must",
+          "depends_on": [
+            "E07-08",
+            "E07-06d"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-13d",
+          "title": "Dựng màn SCR-030 規程・料率版一覧",
+          "discipline": "FE",
+          "description": "Danh sách phiên bản theo năm / trạng thái, số lần thay đổi / 4, lối tạo mới (ROLE-007), lọc 承認待ち cho ROLE-008, nút rollback từ bản 発効.",
+          "acceptance": [
+            "Bộ đếm năm hiển thị đúng RUL-01",
+            "Nút theo vai trò: ROLE-005 / ROLE-011 chỉ xem"
+          ],
+          "spec_refs": [
+            "SCR-030",
+            "RUL-01",
+            "RUL-07"
+          ],
+          "hours": 4,
+          "hours_basis": "Màn danh sách có lọc, 2 nút theo vai trò.",
+          "priority": "must",
+          "depends_on": [
+            "E07-12g",
+            "E07-12d"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-13e",
+          "title": "Dựng màn SCR-031 規程版編集・承認",
+          "discipline": "FE",
+          "description": "Trình soạn bảng bậc (thêm / xóa dòng, ngưỡng, tỷ lệ), N, 発効日, mô tả; nút 保存 / 承認依頼 / 承認 / 差戻し / 廃止 theo vai trò × trạng thái; so sánh với bản hiện hành; chặn người soạn duyệt bản của mình ở UI.",
+          "acceptance": [
+            "Kiểm phía client khớp luật bậc của server (tăng dần, rate < 1)",
+            "Bản 承認待ち hiển thị chỉ đọc với ROLE-007",
+            "差戻し bắt buộc ghi chú"
+          ],
+          "spec_refs": [
+            "SCR-031",
+            "RUL-02",
+            "RUL-03",
+            "RUL-04",
+            "RUL-05",
+            "RUL-06",
+            "RUL-08"
+          ],
+          "hours": 12,
+          "hours_basis": "Form bảng động + ma trận nút theo 2 vai trò × 5 trạng thái + khối so sánh.",
+          "priority": "must",
+          "depends_on": [
+            "E07-12c",
+            "E07-12e",
+            "E07-12g"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E07-14",
+      "title": "Dựng bộ test vector nghiệp vụ 完納奨励金",
+      "discipline": "QA",
+      "description": "Bộ test pgTAP độc lập với unit test từng hàm, chạy end-to-end trên dữ liệu dựng sẵn để chốt công thức với khách và chặn hồi quy.",
+      "acceptance": [
+        "Mọi sub-issue xong, chạy trong CI"
+      ],
+      "spec_refs": [
+        "DD-F023-incentive-calculation-confirm",
+        "DD-F041-payment-csv-import",
+        "FN-incentive-incentive_compute"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — tổng giờ nằm ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E07-07",
+        "E07-09"
+      ],
+      "constraint": "完納奨励金",
+      "sub_issues": [
+        {
+          "key": "E07-14a",
+          "title": "Viết test vector công thức (INC-EDGE-01 / 03, AC-2〜7)",
+          "discipline": "QA",
+          "description": "Fixture N = 10, V1 (0.5% / 1.0%), V2 từ 2027-03-16 (0.6% / 1.2%); chạy 試算 thật qua calculate_incentives và so bảng kết quả: 5,500 / 0 / 6,790 / 0 (trễ 1 ngày) / 0 (thiếu 1 ¥) / 41,800 / P = 117,000 / làm tròn 1 lần 6,791 / rate 6 chữ số 6,957.",
+          "acceptance": [
+            "Toàn bộ test viewpoint 1〜7, 15, 18 của DD-F023 có test tương ứng và pass",
+            "Fixture dùng dữ liệu giả, không dữ liệu thật"
+          ],
+          "spec_refs": [
+            "DD-F023-incentive-calculation-confirm",
+            "FN-incentive-incentive_compute"
+          ],
+          "hours": 8,
+          "hours_basis": "Dựng fixture 2 phiên bản + 9 case kỳ vọng tính tay.",
+          "priority": "must",
+          "depends_on": [
+            "E07-05b"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-14b",
+          "title": "Viết test vector delta và 入金 (INC-EDGE-02, 追加入金, hủy)",
+          "discipline": "QA",
+          "description": "Kịch bản nhiều tháng: kỳ 01 確定 → phiếu điều chỉnh tháng 01 → 試算 kỳ 02 có delta −190; 追加入金 +11,000; re-試算 idempotent; hủy dòng 追加入金 trước khi kỳ 02 確定; import sau 試算 → M_INC_84 → 試算 lại → 確定.",
+          "acceptance": [
+            "Test viewpoint 10, 16 DD-F023 và 7, 12〜14 DD-F041 pass",
+            "Kết quả kỳ 01 không đổi sau mọi bước"
+          ],
+          "spec_refs": [
+            "FN-incentive-record_incentive_delta",
+            "DD-F041-payment-csv-import",
+            "DD-F021-correction-approval-reverse-delta"
+          ],
+          "hours": 8,
+          "hours_basis": "Kịch bản 3 tháng nhiều bước nối E06 (decide_correction) và E07.",
+          "priority": "must",
+          "depends_on": [
+            "E07-06b",
+            "E07-10"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        },
+        {
+          "key": "E07-14c",
+          "title": "Viết test tương tranh khóa kỳ thưởng",
+          "discipline": "QA",
+          "description": "Script 2 session: INC-03 vs INC-04 cùng kỳ; PAY-01 vs INC-04; record_delivery / decide_correction (khóa shared) vs 試算 (khóa exclusive). Xác nhận không có dòng 精算 / 入金 lọt sau mốc last_calculated_at mà không bị chặn hoặc thành delta.",
+          "acceptance": [
+            "Test viewpoint 17 DD-F023 và 16 DD-F041 pass",
+            "Không deadlock khi chạy lặp 100 lần"
+          ],
+          "spec_refs": [
+            "FN-incentive-confirm_incentives",
+            "FN-incentive-record_incentive_delta",
+            "ADR-003"
+          ],
+          "hours": 8,
+          "hours_basis": "Kịch bản 2 session có điểm dừng, 3 cặp tương tranh, chạy lặp.",
+          "priority": "should",
+          "depends_on": [
+            "E07-07a",
+            "E07-09c",
+            "E07-06c"
+          ],
+          "constraint": "完納奨励金",
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E07-15",
+      "title": "Nạp dữ liệu khởi tạo phiên bản quy tắc v1 và bảng bậc",
+      "discipline": "DB",
+      "description": "Seed rule_versions v1 (không tính vào hạn mức 4 lần / năm) + rule_rate_tiers + payment_due_day cho go-live, effective_from ≤ ngày dữ liệu đầu tiên. Giá trị tạm theo ví dụ function-23 cho tới khi khách cấp bảng thật (OQ-14).",
+      "acceptance": [
+        "Seed chạy idempotent trên môi trường mới",
+        "rule_version_for_date trả v1 cho mọi 業務日 từ ngày go-live",
+        "Giá trị tách ra file cấu hình để thay khi có OQ-14"
+      ],
+      "spec_refs": [
+        "TBL-rule_versions",
+        "TBL-rule_rate_tiers",
+        "ADR-005"
+      ],
+      "hours": 2,
+      "hours_basis": "Script seed nhỏ, giá trị chờ khách.",
+      "priority": "should",
+      "depends_on": [
+        "E07-01"
+      ],
+      "constraint": "完納奨励金",
+      "sub_issues": []
+    }
+  ],
+  "spec_not_issued": [
+    {
+      "spec": "DD-F023 test viewpoint 14 / F-023 AC-17 (試算 1 tháng tải năm 3 ≤ 5 phút)",
+      "reason": "Đo bằng load test ở ST, ngoài giai đoạn lập trình + unit test; E07-05b chỉ bảo đảm set-based và review EXPLAIN."
+    },
+    {
+      "spec": "AUD-02 GET /api/audit-logs/rule-applications (phiên bản đã áp dụng trên bản ghi thưởng)",
+      "reason": "Thuộc F-032 → issue ở E10; E07 chỉ bảo đảm rule_version_id lưu đúng trên incentive_line_parts."
+    },
+    {
+      "spec": "RPT 07 / FORM-INC-01 (báo cáo kết quả thưởng)",
+      "reason": "Thuộc F-028 / F-029 → E09 đọc incentive_lines."
+    },
+    {
+      "spec": "Ghi rule_version_id vào settlement_lines trong record_delivery / decide_correction",
+      "reason": "Do hàm của E05 / E06 ghi (gọi rule_version_for_date của E07-03); E07 chỉ cung cấp hàm tra và helper khóa E07-06c."
+    },
+    {
+      "spec": "Giá trị bảng bậc / N thật (OQ-14) và xác nhận giả định A-06 / A-07 (OQ-06 / OQ-07)",
+      "reason": "Chờ khách trả lời; seed tạm ở E07-15, code đã theo giả định — khách trả lời khác thì mở CR / issue mới."
+    }
+  ],
+  "spec_gaps": [
+    {
+      "spec": "DD-F023 / DD-F041 ↔ FN-incentive-* / FN-payment-*",
+      "gap": "Message ID không khớp: DD dùng M_INC_01/02/03/04/09/10/86 và M_PAY_03/05/06/07/08/09/13/16/21/22, FN dùng M_INC_80/81/82/83/84/85/51/70 và M_PAY_80〜90; common-message-list chứa cả hai bộ cho cùng điều kiện (sequence DD-F023 lại ghi 81/82/83).",
+      "proposal": "sửa thiết kế",
+      "note": "Đề xuất chốt bộ của FN (server raise) làm chuẩn, bộ M_INC_0x / M_PAY_0x chỉ còn cho kiểm client hoặc xóa; sửa bảng Error trong 2 DD trước khi dev viết test."
+    },
+    {
+      "spec": "FN-incentive-record_incentive_delta ↔ FN-correction-decide_correction bước 20, DD-F041 bước 2.6 / 3.3, FN README No.57",
+      "gap": "FN record_incentive_delta ghi rõ hàm nguồn KHÔNG gọi nó (chỉ calculate_incentives gọi dưới khóa kỳ), nhưng decide_correction, DD-F041 và cột Called by của README lại cho decide_correction / import_payments / reverse_payment gọi trực tiếp.",
+      "proposal": "sửa thiết kế",
+      "note": "Backlog theo FN record_incentive_delta (delta sinh lúc 試算 kỳ nhận); cần bỏ bước 20 của decide_correction và sửa DD-F041 / README, nếu không sẽ sinh delta 2 lần."
+    },
+    {
+      "spec": "FN-incentive-calculate_incentives bước 5 (M_INC_70)",
+      "gap": "Luật mới 'kỳ trước phải 確定 mới được 試算 kỳ sau' do FN tự thêm, không có trong function-23 / DD-F023 và chưa có trong open-questions.md dù FN ghi là câu hỏi mở cho khách.",
+      "proposal": "issue làm rõ",
+      "note": "Thêm OQ mới gửi 照合部門長; nếu khách không đồng ý, record_incentive_delta phải xử lý nhiều kỳ nhận delta cùng lúc."
+    },
+    {
+      "spec": "FN-payment-import_payments bước 11 (M_PAY_71)",
+      "gap": "Chặn 入金 của người tham gia không có dòng 精算 trong tháng là luật suy ra từ function-23 §5.1, FN tự ghi là câu hỏi mở nhưng không có trong open-questions.md; mâu thuẫn với incentive_compute tính cả người chỉ có 入金.",
+      "proposal": "issue làm rõ",
+      "note": "Hỏi khách có trường hợp 入金 trả trước / trả gộp không; tạm hiện thực như FN."
+    },
+    {
+      "spec": "DD-F041 bước 2.1 / 2.9 ↔ FN-payment-import_payments",
+      "gap": "DD khóa incentive_periods FOR UPDATE và lưu file CSV sau commit; FN dùng advisory lock shared + FOR SHARE và nhận p_attachment_id (file lưu trước khi gọi rpc). Dry_run DD trả M_PAY_16, FN trả M_PAY_90.",
+      "proposal": "sửa thiết kế",
+      "note": "Backlog theo FN (cho phép import song song); cần sửa DD-F041 và quyết định file lưu trước hay sau — lưu trước thì batch lỗi cũng giữ file, lưu sau thì có thể mất file khi Storage lỗi."
+    },
+    {
+      "spec": "DD-F025 v1.0 ↔ API-LIST v1.1 RUL-07 / RUL-08, FN-rule-rule_version_rollback / cancel",
+      "gap": "DD-F025 cho RUL-07 do ROLE-008 gọi, vừa 廃止 bản 承認済 vừa tạo bản mới 承認待ち; API list và FN đã tách: RUL-07 do ROLE-007 tạo bản 下書き chỉ từ bản 発効, RUL-08 廃止. DD-F025 chưa có RUL-08, test viewpoint 9 / 10 sai theo thiết kế mới.",
+      "proposal": "sửa thiết kế",
+      "note": "Backlog theo API-LIST + FN; cập nhật DD-F025 lên v1.1."
+    },
+    {
+      "spec": "TBL-settlement_lines / TBL-payments Note ↔ FN-incentive-record_incentive_delta",
+      "gap": "Note bảng nói trigger chỉ cho gán incentive_delta_id lần đầu, nhưng re-試算 cần gỡ / gán lại khi kỳ áp delta chưa 確定.",
+      "proposal": "sửa thiết kế",
+      "note": "E07-01 hiện thực theo FN; sửa Note 2 bảng. Note settlement_lines còn dùng tên cũ cancel_delivery (tên chốt reverse_delivery)."
+    },
+    {
+      "spec": "FN-incentive-confirm_incentives bước 8 + hợp đồng khóa shared",
+      "gap": "Guard M_INC_51 chỉ kín khi MỌI hàm ghi settlement_lines / payments lấy khóa shared incentive_period trước khi ghi, nhưng FN của record_delivery / reverse_delivery / record_delivery_exception / decide_correction (E05 / E06) không ghi bước này.",
+      "proposal": "sửa thiết kế",
+      "note": "Tạo helper E07-06c; owner E05 / E06 phải thêm lời gọi và test; nên bổ sung bước vào các FN đó."
+    },
+    {
+      "spec": "SCR-029 frontmatter ↔ DD-F023 §6 / AUD-02",
+      "gap": "DD-F023 nói SCR-029 dùng AUD-02 xem phiên bản đã áp dụng, nhưng SCR-029 không liệt kê AUD-02; INC-02 đã trả parts có rule_version_id nên có thể thừa.",
+      "proposal": "giả định",
+      "note": "Giả định SCR-029 chỉ dùng INC-02; AUD-02 dùng ở SCR-034 (E10)."
+    }
+  ]
+}

@@ -1,0 +1,436 @@
+{
+  "epic": "E06",
+  "title": "Đối soát, khóa ngày, điều chỉnh, tranh chấp",
+  "f_ids": ["F-019", "F-020", "F-021", "F-022"],
+  "summary": "Bảng đối soát theo 業務日, khóa / mở khóa sổ, phiếu điều chỉnh sau 確定 sinh bản ghi reverse / delta (không ghi đè) qua duyệt 1 cấp, và quản lý tranh chấp có diễn biến + tệp đính kèm.",
+  "issues": [
+    {
+      "key": "E06-01",
+      "title": "Hiện thực bảng đối soát ngày (closing_summary + CLS-01 / CLS-02)",
+      "discipline": "BE",
+      "description": "Tổng hợp số liệu từng 業務日 để ROLE-005 đối soát trước khi khóa sổ; chỉ đọc, không khóa dòng.",
+      "acceptance": ["Mọi sub-issue xong"],
+      "spec_refs": ["FN-closing-closing_summary", "CLS-01", "CLS-02", "DD-F019-daily-reconciliation-lock"],
+      "hours": null,
+      "hours_basis": "Issue cha — tổng giờ nằm ở sub-issue.",
+      "priority": "must",
+      "depends_on": ["E00-02"],
+      "sub_issues": [
+        {
+          "key": "E06-01a",
+          "title": "Viết hàm closing_summary tính số liệu theo 業務日",
+          "discipline": "BE",
+          "description": "Truy vấn lateral mỗi ngày D: tổng giao dịch (giá trị hiệu lực qua sett_trade_effective), giao hàng, ngoại lệ, số 下書き / 確認待ち, 同期要照合, dòng 精算; lọc trạng thái / chỉ ngày cần xử lý, phân trang, khoảng ≤ 366 ngày; ngày 休市 vẫn có dòng số 0.",
+          "acceptance": [
+            "p_from > p_to → M_09; khoảng > 366 ngày → M_06",
+            "Giao dịch có phiếu điều chỉnh 承認 hiện giá trị sau delta",
+            "total trả số dòng trước phân trang",
+            "Truy vấn 60 ngày dữ liệu tải năm 3 dưới 2 giây trên dữ liệu thử"
+          ],
+          "spec_refs": ["FN-closing-closing_summary", "FN-trade-sett_trade_effective", "TBL-business_days", "TBL-trades", "TBL-deliveries", "TBL-sync_operations"],
+          "hours": 8,
+          "hours_basis": "6 chỉ số con lateral trên 5 bảng, có lọc / phân trang và biên ngày nghỉ.",
+          "priority": "must",
+          "depends_on": ["E00-02"],
+          "sub_issues": []
+        },
+        {
+          "key": "E06-01b",
+          "title": "Dựng API CLS-01 / CLS-02 đối soát ngày",
+          "discipline": "BE",
+          "description": "CLS-01 trả 60 ngày gần nhất; CLS-02 trả chi tiết 1 ngày: danh sách mục chặn khóa sổ (下書き / 確認待ち / 要照合) và giao hàng còn tồn. ROLE-005 / 006 thao tác, ROLE-010 / 011 chỉ xem.",
+          "acceptance": [
+            "ROLE-010 / ROLE-011 đọc được, vai trò khác → 403",
+            "CLS-02 liệt kê mã giao dịch / mục đồng bộ đang chặn"
+          ],
+          "spec_refs": ["CLS-01", "CLS-02", "FN-common-getBusinessDay"],
+          "hours": 4,
+          "hours_basis": "2 route đọc bọc hàm có sẵn + 1 truy vấn danh sách mục chặn.",
+          "priority": "must",
+          "depends_on": ["E06-01a", "E00-01"],
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E06-02",
+      "title": "Viết lock_business_day và API CLS-03 khóa sổ",
+      "discipline": "BE",
+      "description": "Khóa dòng business_days FOR UPDATE, kiểm 休市日 (M_CLS_07), đã 締め済 (409 M_CLS_08), ngày tương lai (M_CLS_06), rồi đếm lại mục chặn sau khi giữ khóa (下書き / 確認待ち / 同期要照合 → M_CLS_01 + detail đếm); ghi 締め済 + người đối soát + discrepancy_count / remarks, audit business_day.lock.",
+      "acceptance": [
+        "Ngày còn 1 下書き, 2 確認待ち → 422 M_CLS_01 với error_extra đúng số",
+        "Còn giao hàng 引渡し中 vẫn khóa được",
+        "Ghi giao hàng ngày D sau khi khóa bị chặn M_COM_09 (qua ensure_business_day_open)",
+        "Hai người cùng khóa → người sau nhận 409"
+      ],
+      "spec_refs": ["FN-closing-lock_business_day", "CLS-03", "TBL-business_days", "DD-F019-daily-reconciliation-lock", "FN-common-ensure_business_day_open"],
+      "hours": 8,
+      "hours_basis": "4 guard + đếm 3 loại mục chặn sau khóa, tương tranh với hàm ghi giữ khóa for share.",
+      "priority": "must",
+      "depends_on": ["E06-01a", "E00-03"],
+      "sub_issues": []
+    },
+    {
+      "key": "E06-03",
+      "title": "Viết unlock_business_day và API CLS-04 mở khóa sổ",
+      "discipline": "BE",
+      "description": "ROLE-006 mở khóa có lý do 1〜500 (QA-002): business_days FOR UPDATE, 締め済 → 開, vô hiệu batch kế toán của ngày (無効 + lý do), notify_event, audit business_day.unlock; trả danh sách batch_code đã vô hiệu.",
+      "acceptance": [
+        "Thiếu lý do → 400 / M_01",
+        "Ngày đã 開 → 409 M_CLS_08",
+        "Batch 作成済 / ダウンロード済 của ngày chuyển 無効, ACC-03 sau đó từ chối tải",
+        "Ngày thuộc kỳ thưởng đã 試算 → INC-04 bị chặn M_INC_81 cho tới khi khóa lại"
+      ],
+      "spec_refs": ["FN-closing-unlock_business_day", "CLS-04", "TBL-business_days", "TBL-accounting_export_batches", "ADR-007"],
+      "hours": 8,
+      "hours_basis": "Chuyển trạng thái + cập nhật bảng con theo thứ tự khóa + thông báo, có liên đới E07 / E09.",
+      "priority": "must",
+      "depends_on": ["E06-02", "E08-01"],
+      "sub_issues": []
+    },
+    {
+      "key": "E06-04",
+      "title": "Dựng màn SCR-022 日次照合表・締め",
+      "discipline": "FE",
+      "description": "Bảng 60 ngày (tổng, trạng thái 開 / 締め済), panel chi tiết ngày với mục chặn và giao hàng tồn, tab dòng 精算 (DLV-06 của E05), dialog 締め (số chênh lệch, ghi chú) cho ROLE-005, dialog 締め解除 bắt buộc lý do cho ROLE-006; ROLE-010 / 011 chỉ xem.",
+      "acceptance": [
+        "Lỗi M_CLS_01 hiển thị đếm từng loại và link tới mục chặn",
+        "Nút theo vai trò đúng ma trận F-019 / F-020",
+        "Header cập nhật badge 開 / 締め済 sau khi khóa"
+      ],
+      "spec_refs": ["SCR-022", "CLS-01", "CLS-02", "CLS-03", "CLS-04", "DLV-06"],
+      "hours": 12,
+      "hours_basis": "Màn PC nhiều khối (danh sách, chi tiết, 2 dialog) và 5 API, phân quyền theo 4 vai trò.",
+      "priority": "must",
+      "depends_on": ["E06-01b", "E06-02", "E06-03", "E00-01"],
+      "sub_issues": []
+    },
+    {
+      "key": "E06-05",
+      "title": "Viết test tương tranh khóa sổ với ghi nghiệp vụ",
+      "discipline": "QA",
+      "description": "Kịch bản 2 session: 締め trong khi ROLE-004 ghi giao hàng / ROLE-003 chốt giao dịch cùng ngày (for share vs for update), duyệt phiếu điều chỉnh trong khi mở / khóa ngày gốc; xác nhận thứ tự khóa README §2 No.5 không deadlock.",
+      "acceptance": [
+        "Không có giao dịch / giao hàng nào ghi vào ngày đã 締め済",
+        "Chạy lặp 100 lần không deadlock"
+      ],
+      "spec_refs": ["FN-closing-lock_business_day", "FN-correction-decide_correction", "ADR-003"],
+      "hours": 8,
+      "hours_basis": "3 cặp tương tranh có điểm dừng, chạy lặp.",
+      "priority": "should",
+      "depends_on": ["E06-02", "E06-10b"],
+      "sub_issues": []
+    },
+    {
+      "key": "E06-06",
+      "title": "Viết sett_check_correction kiểm nội dung phiếu điều chỉnh",
+      "discipline": "BE",
+      "description": "Hàm kiểm dùng chung cho lập / sửa / duyệt phiếu: giao dịch phải 確定 / 再確定; 取消 chỉ khi ngày gốc đã khóa và chưa giao; 数量 theo đơn vị, ≥ đã giao, ≤ hiệu lực + còn lại lô; 単価 khác giá cũ; 買手変更 không phải 卸売業者 và hợp lệ tại 業務日 gốc. Trả snapshot làm before_*.",
+      "acceptance": [
+        "Mỗi nhánh có test raise đúng M_COR_01/03/04/05/07/08/09",
+        "Người mua mới hết hiệu lực tại ngày gốc → lỗi kèm lý do từ participant_eligibility_reason",
+        "kg cho 1 chữ số thập phân, ケース / 尾 / 箱 chỉ số nguyên"
+      ],
+      "spec_refs": ["FN-correction-sett_check_correction", "FN-eligibility-eligibility_is_valid_on", "TBL-correction_requests", "TBL-trades"],
+      "hours": 8,
+      "hours_basis": "4 loại phiếu × 3–5 luật mỗi loại, gọi hàm hiệu lực của E02.",
+      "priority": "must",
+      "depends_on": ["E00-02"],
+      "sub_issues": []
+    },
+    {
+      "key": "E06-07",
+      "title": "Viết submit_correction và API COR-02 lập phiếu",
+      "discipline": "BE",
+      "description": "Chuẩn hóa lý do, bắt buộc 1〜5 tệp bằng chứng (file ref ATT-02), khóa trades, chặn phiếu mở thứ 2 (M_COR_02, bắt cả unique_violation), sett_check_correction, insert phiếu C-YYYYMMDD-nnnnn 申請中, attachment_register, notify ROLE-006, audit correction.submit.",
+      "acceptance": [
+        "Không có tệp → M_01 (AC-8)",
+        "Giao dịch đã có phiếu 申請中 / 差戻し → M_COR_02",
+        "Thành công tạo thông báo cho ROLE-006 và dòng attachments 証憑3年"
+      ],
+      "spec_refs": ["FN-correction-submit_correction", "COR-02", "FN-attachment-attachment_register", "FN-common-next_business_no"],
+      "hours": 8,
+      "hours_basis": "Ghi 3 bảng + đăng ký tệp + thông báo, có chống phiếu mở trùng.",
+      "priority": "must",
+      "depends_on": ["E06-06", "E00-04", "E08-01"],
+      "sub_issues": []
+    },
+    {
+      "key": "E06-08",
+      "title": "Viết resubmit_correction và API COR-07 gửi lại phiếu 差戻し",
+      "discipline": "BE",
+      "description": "Chỉ người lập, phiếu 差戻し → 申請中 với nội dung / tệp mới, chạy lại sett_check_correction, optimistic lock updated_at, thông báo lại ROLE-006, audit.",
+      "acceptance": [
+        "Người khác người lập → 403 / lỗi quyền",
+        "Phiếu không ở 差戻し → M_COR_18 hoặc 409"
+      ],
+      "spec_refs": ["FN-correction-resubmit_correction", "COR-07"],
+      "hours": 4,
+      "hours_basis": "Chuyển trạng thái + tái dùng hàm kiểm và đăng ký tệp.",
+      "priority": "must",
+      "depends_on": ["E06-07"],
+      "sub_issues": []
+    },
+    {
+      "key": "E06-09",
+      "title": "Viết withdraw_correction và API COR-06 rút phiếu",
+      "discipline": "BE",
+      "description": "Người lập rút phiếu 申請中 / 差戻し → 取下げ, audit correction.withdraw; không đụng giao dịch / lô.",
+      "acceptance": [
+        "Phiếu đã 承認 / 却下 → lỗi trạng thái",
+        "Sau rút, giao dịch lập được phiếu mới"
+      ],
+      "spec_refs": ["FN-correction-withdraw_correction", "COR-06"],
+      "hours": 2,
+      "hours_basis": "1 chuyển trạng thái đơn giản.",
+      "priority": "must",
+      "depends_on": ["E06-07"],
+      "sub_issues": []
+    },
+    {
+      "key": "E06-10",
+      "title": "Hiện thực duyệt phiếu điều chỉnh (decide_correction + COR-05)",
+      "discipline": "BE",
+      "description": "ROLE-006 承認 / 却下 / 差戻し; 承認 sinh cặp reverse + delta, cập nhật lô, trạng thái giao dịch, dòng 精算 修正 trong 1 transaction (ADR-004, không ghi đè).",
+      "acceptance": ["Mọi sub-issue xong; bảng ví dụ tính trong FN-correction-decide_correction pass"],
+      "spec_refs": ["FN-correction-decide_correction", "COR-05", "DD-F021-correction-approval-reverse-delta"],
+      "hours": null,
+      "hours_basis": "Issue cha — tổng giờ nằm ở sub-issue.",
+      "priority": "must",
+      "depends_on": ["E06-06"],
+      "sub_issues": [
+        {
+          "key": "E06-10a",
+          "title": "Viết guard duyệt, nhánh 却下 / 差戻し và route COR-05",
+          "discipline": "BE",
+          "description": "Kiểm quyết định và ghi chú (bắt buộc khi 却下 / 差戻し), khóa business_days (gốc + hôm nay, tăng dần) khi 承認 rồi phiếu FOR UPDATE; kiểm updated_at, trạng thái 申請中 (M_COR_18), người duyệt ≠ người lập theo người (M_COR_12). Nhánh 却下 / 差戻し chỉ cập nhật phiếu + notify + audit.",
+          "acceptance": [
+            "Người lập có cả ROLE-006 tự duyệt → M_COR_12 (AC-12)",
+            "却下 không ghi chú → M_01",
+            "却下 không tạo bản ghi điều chỉnh nào, giao dịch giữ 確定"
+          ],
+          "spec_refs": ["FN-correction-decide_correction", "COR-05", "TBL-correction_requests"],
+          "hours": 8,
+          "hours_basis": "Thứ tự khóa nhiều mức + 5 guard + 2 nhánh đơn, kèm route.",
+          "priority": "must",
+          "depends_on": ["E06-07", "E08-01"],
+          "sub_issues": []
+        },
+        {
+          "key": "E06-10b",
+          "title": "Ghi reverse / delta, cập nhật lô và trạng thái giao dịch khi 承認",
+          "discipline": "BE",
+          "description": "Khóa trades → lots; chọn booked_biz_date (ngày gốc nếu còn 開, nếu không thì hôm nay); kiểm lại lô còn đủ (M_COR_13) và sett_check_correction; ghi trade_adjustments reverse + delta (floor(q × p)); cập nhật lots.remaining_qty, trades 再確定 / 取消 và delivery_status tính lại; sett_refresh_lot_status; audit 2 dòng correction.approve + trade.adjust.",
+          "acceptance": [
+            "Ví dụ #1 / #2 (数量 40 → 35, ngày gốc 締め済 / 開) đúng booked_biz_date và lô 17.0 kg",
+            "Ví dụ #5 取消: lô +40 kg, 確定 → 公開, giao dịch 取消",
+            "Ví dụ #6: còn 3.0 kg, xin +5 → M_COR_13, phiếu giữ 申請中",
+            "Giá trị gốc của trades không bị UPDATE"
+          ],
+          "spec_refs": ["FN-correction-decide_correction", "TBL-trade_adjustments", "TBL-lots", "TBL-trades", "FN-lot-sett_refresh_lot_status", "ADR-004"],
+          "hours": 12,
+          "hours_basis": "4 loại phiếu, 2 cách chọn ngày ghi sổ, cập nhật 4 bảng theo thứ tự khóa và 2 dòng audit.",
+          "priority": "must",
+          "depends_on": ["E06-10a"],
+          "sub_issues": []
+        },
+        {
+          "key": "E06-10c",
+          "title": "Ghi dòng 精算 修正 cho phần đã giao khi 承認 単価 / 買手変更",
+          "discipline": "BE",
+          "description": "Với mỗi lần giao còn hiệu lực: 単価 → 1 dòng chênh floor(qty × mới) − floor(qty × cũ); 買手変更 → 2 dòng (người mua cũ âm, người mua mới dương); target_period = tháng của lần giao gốc (A-07), rule_version_id theo ngày giao gốc. Gọi helper khóa shared incentive_period (E07-06c) trước khi ghi; KHÔNG gọi trực tiếp record_incentive_delta (xem spec_gaps).",
+          "acceptance": [
+            "Ví dụ #3: d1 −1,813, d2 đúng số; bỏ dòng amount 0",
+            "Ví dụ #4: (31, −12.5, −22,500) và (47, +12.5, +22,500)",
+            "Kỳ thưởng của tháng gốc đã 確定 → dòng 修正 thành nguồn delta ở lần 試算 kế tiếp (kiểm cùng E07-14b)"
+          ],
+          "spec_refs": ["FN-correction-decide_correction", "TBL-settlement_lines", "TBL-deliveries", "FN-incentive-record_incentive_delta"],
+          "hours": 8,
+          "hours_basis": "2 công thức theo từng lần giao, gồm dòng 返品 âm, cộng hợp đồng khóa với E07.",
+          "priority": "must",
+          "depends_on": ["E06-10b", "E07-06c"],
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E06-11",
+      "title": "Dựng API tra cứu phiếu điều chỉnh COR-01 / COR-03 / COR-04",
+      "discipline": "BE",
+      "description": "COR-01 giá trị hiện tại của giao dịch + phiếu đang mở; COR-03 danh sách theo trạng thái (mới nhất trước); COR-04 chi tiết phiếu, before / after và bản ghi reverse / delta / 精算 đã sinh. Phạm vi xem theo vai trò (ROLE-005 chỉ phiếu của mình theo OQ-20).",
+      "acceptance": [
+        "ROLE-011 xem mọi phiếu, ROLE-003 / 005 chỉ phiếu mình lập",
+        "COR-04 phiếu 承認 trả đủ dòng trade_adjustments và settlement_lines liên quan"
+      ],
+      "spec_refs": ["COR-01", "COR-03", "COR-04", "TBL-correction_requests", "TBL-trade_adjustments"],
+      "hours": 8,
+      "hours_basis": "3 API đọc, lọc phạm vi theo vai trò và join 4 bảng.",
+      "priority": "must",
+      "depends_on": ["E06-07", "E00-01"],
+      "sub_issues": []
+    },
+    {
+      "key": "E06-12",
+      "title": "Dựng màn SCR-023 修正申請書入力",
+      "discipline": "FE",
+      "description": "Mở từ SCR-015: hiện giá trị hiện tại (COR-01), chọn loại 取消 / 数量 / 単価 / 買手変更, nhập giá trị mới + lý do, tải 1〜5 tệp qua ATT-01 / ATT-02, gửi COR-02; chế độ sửa phiếu 差戻し gửi COR-07.",
+      "acceptance": [
+        "Ô nhập đổi theo loại phiếu; kiểm client khớp luật server",
+        "Lỗi M_COR_02 hiện link tới phiếu đang mở",
+        "Upload lỗi không mất dữ liệu đã nhập"
+      ],
+      "spec_refs": ["SCR-023", "COR-01", "COR-02", "COR-07", "ATT-01", "ATT-02"],
+      "hours": 12,
+      "hours_basis": "Form động 4 loại + upload nhiều tệp + 2 chế độ tạo / sửa.",
+      "priority": "must",
+      "depends_on": ["E06-07", "E06-08", "E06-11", "E00-04"],
+      "sub_issues": []
+    },
+    {
+      "key": "E06-13",
+      "title": "Dựng màn SCR-024 修正申請詳細・承認",
+      "discipline": "FE",
+      "description": "Chi tiết phiếu, so sánh trước / sau, tệp (ATT-03), bản ghi đã sinh; ROLE-006 có nút 承認 / 却下 / 差戻し (ghi chú bắt buộc khi từ chối); người lập có nút 取下げ / sửa; ROLE-011 chỉ xem.",
+      "acceptance": [
+        "Người lập không thấy nút duyệt phiếu của mình",
+        "Lỗi M_COR_13 hiện số còn lại mới nhất của lô"
+      ],
+      "spec_refs": ["SCR-024", "COR-04", "COR-05", "COR-06", "ATT-03"],
+      "hours": 8,
+      "hours_basis": "Màn chi tiết + ma trận nút theo vai trò × trạng thái + dialog quyết định.",
+      "priority": "must",
+      "depends_on": ["E06-10a", "E06-09", "E06-11"],
+      "sub_issues": []
+    },
+    {
+      "key": "E06-14",
+      "title": "Viết bộ test vector phiếu điều chỉnh reverse / delta",
+      "discipline": "QA",
+      "description": "pgTAP end-to-end 6 tình huống ở bảng ví dụ của decide_correction (数量 ngày gốc khóa / mở, 単価 sau 2 lần giao, 買手変更 sau giao, 取消, lô không đủ) và AC-16 (kỳ thưởng 確定 → delta kỳ sau, kết quả kỳ gốc không đổi).",
+      "acceptance": [
+        "6 tình huống + AC-16 pass trong CI",
+        "Kiểm hiệu lực = gốc + Σ adjustments cho mọi tình huống"
+      ],
+      "spec_refs": ["FN-correction-decide_correction", "DD-F021-correction-approval-reverse-delta"],
+      "hours": 8,
+      "hours_basis": "Fixture giao dịch + giao hàng nhiều lần, 7 kịch bản kỳ vọng tính tay.",
+      "priority": "must",
+      "depends_on": ["E06-10c"],
+      "sub_issues": []
+    },
+    {
+      "key": "E06-15",
+      "title": "Viết dispute_open và API DSP-02 mở tranh chấp",
+      "discipline": "BE",
+      "description": "Kiểm nội dung, phân loại, 業務日 / hạn xử lý, ít nhất 1 đối tượng (giao dịch / lần giao / người tham gia / ngoại lệ), suy ra trade từ lần giao, người phụ trách là user nội bộ; mã DP-YYYYMMDD-nnnnn; gắn ngoại lệ (khóa delivery_exceptions); đăng ký tệp; notify dispute_opened; Idempotency-Key ở route.",
+      "acceptance": [
+        "Không đối tượng → M_DSP_01",
+        "Hai người cùng chuyển 1 ngoại lệ thành tranh chấp → người sau M_DSP_52",
+        "Gửi lại cùng Idempotency-Key không tạo tranh chấp thứ 2"
+      ],
+      "spec_refs": ["FN-dispute-dispute_open", "DSP-02", "TBL-disputes", "TBL-delivery_exceptions", "FN-attachment-attachment_register"],
+      "hours": 8,
+      "hours_basis": "7 kiểm đầu vào, khóa bảng con, đăng ký tệp, thông báo và idempotency.",
+      "priority": "must",
+      "depends_on": ["E00-04", "E08-01"],
+      "sub_issues": []
+    },
+    {
+      "key": "E06-16",
+      "title": "Viết dispute_update và API DSP-04 (patch) / DSP-05 (ghi chú)",
+      "discipline": "BE",
+      "description": "Patch (ROLE-005): optimistic lock, chỉ sửa phân loại / nội dung / người phụ trách / hạn / 未対応 → 対応中 (M_DSP_54, M_DSP_55). Ghi chú (ROLE-003 / 004 / 005 phần mình): insert dispute_notes append-only ≤ 2,000 ký tự + ≤ 5 tệp, cập nhật updated_at tranh chấp; tranh chấp đã đóng → M_DSP_05.",
+      "acceptance": [
+        "Patch không đổi gì → M_DSP_55",
+        "ROLE-004 gọi patch → 403, gọi ghi chú → OK",
+        "Ghi chú đồng thời không chặn nhau; resolve song song bị chặn bởi for share"
+      ],
+      "spec_refs": ["FN-dispute-dispute_update", "DSP-04", "DSP-05", "TBL-disputes", "TBL-dispute_notes"],
+      "hours": 8,
+      "hours_basis": "2 chế độ trong 1 hàm, 7 luật patch, phạm vi vai trò và khóa khác nhau theo chế độ.",
+      "priority": "must",
+      "depends_on": ["E06-15"],
+      "sub_issues": []
+    },
+    {
+      "key": "E06-17",
+      "title": "Viết dispute_resolve (解決済 / 取下げ) qua DSP-04",
+      "discipline": "BE",
+      "description": "Kết quả cuối bắt buộc ≤ 1,000, optimistic lock, cho phép từ 未対応 hoặc 対応中, ghi resolved_by / at, audit dispute.resolve / withdraw. Batch kế toán tạo sau không còn giữ 保留 cho người tham gia.",
+      "acceptance": [
+        "Đóng tranh chấp đã đóng → M_DSP_05",
+        "Thiếu kết quả → M_01"
+      ],
+      "spec_refs": ["FN-dispute-dispute_resolve", "DSP-04", "TBL-disputes"],
+      "hours": 4,
+      "hours_basis": "Chuyển trạng thái kết thúc, 4 kiểm.",
+      "priority": "must",
+      "depends_on": ["E06-15"],
+      "sub_issues": []
+    },
+    {
+      "key": "E06-18",
+      "title": "Dựng API danh sách / chi tiết tranh chấp DSP-01 / DSP-03",
+      "discipline": "BE",
+      "description": "DSP-01 lọc trạng thái / người phụ trách / quá hạn (due_date < hôm nay và chưa đóng); DSP-03 trả tranh chấp + ghi chú (dispute_notes) + tệp + lịch sử audit. ROLE-003 / 004 chỉ xem tranh chấp liên quan phần mình.",
+      "acceptance": [
+        "Bộ lọc quá hạn đúng theo JST",
+        "ROLE-010 xem được, không có nút ghi"
+      ],
+      "spec_refs": ["DSP-01", "DSP-03", "TBL-disputes", "TBL-dispute_notes", "TBL-attachments"],
+      "hours": 4,
+      "hours_basis": "2 API đọc, lọc phạm vi theo vai trò.",
+      "priority": "must",
+      "depends_on": ["E06-15"],
+      "sub_issues": []
+    },
+    {
+      "key": "E06-19",
+      "title": "Dựng màn SCR-025 紛争一覧",
+      "discipline": "FE",
+      "description": "Danh sách tranh chấp có lọc trạng thái / người phụ trách (USR-07) / quá hạn, dialog đăng ký mới (chọn giao dịch / lần giao / người tham gia, tệp) cho ROLE-005.",
+      "acceptance": [
+        "Bấm đăng ký 2 lần không tạo 2 bản (Idempotency-Key)",
+        "Dòng quá hạn được đánh dấu"
+      ],
+      "spec_refs": ["SCR-025", "DSP-01", "DSP-02", "USR-07", "PTY-01"],
+      "hours": 8,
+      "hours_basis": "Danh sách + form tạo có chọn đối tượng và upload.",
+      "priority": "must",
+      "depends_on": ["E06-15", "E06-18"],
+      "sub_issues": []
+    },
+    {
+      "key": "E06-20",
+      "title": "Dựng màn SCR-026 紛争詳細",
+      "discipline": "FE",
+      "description": "Chi tiết, dòng thời gian diễn biến (ghi chú + audit), form sửa cho ROLE-005, form ghi chú + tệp cho ROLE-003 / 004 / 005, dialog 解決 / 取下げ; bố cục dùng được trên tablet cho ROLE-004.",
+      "acceptance": [
+        "409 khi người khác vừa sửa → tải lại và giữ ghi chú đang soạn",
+        "Tranh chấp đã đóng chuyển chỉ đọc",
+        "Hiển thị đúng ở 1024 px ngang"
+      ],
+      "spec_refs": ["SCR-026", "DSP-03", "DSP-04", "DSP-05", "ATT-01", "ATT-02", "ATT-03"],
+      "hours": 12,
+      "hours_basis": "Màn chi tiết 3 form theo vai trò, upload tệp, xử lý 409 và bố cục PC + tablet.",
+      "priority": "must",
+      "depends_on": ["E06-16", "E06-17", "E06-18", "E00-04"],
+      "sub_issues": []
+    }
+  ],
+  "spec_not_issued": [
+    {"spec": "SCR-004 承認待ち一覧 / ELG-02 (gộp 資格申請 + 修正申請)", "reason": "Màn chung F-004★ / F-021★; giả định E02 làm (luồng chính là 資格申請). E06 chỉ cung cấp COR-03 lọc 申請中 — cần xác nhận với owner E02."},
+    {"spec": "DLV-06 dòng 精算 hiển thị trong SCR-022 (F-018)", "reason": "API thuộc E05; E06-04 chỉ nối hiển thị."},
+    {"spec": "Kích hoạt job daily_report_build sau khi khóa sổ", "reason": "Job thuộc E09 (F-028), đọc business_days.status; lock_business_day không gọi trực tiếp."},
+    {"spec": "Xác nhận hoàn tất của ROLE-006 cho tranh chấp liên quan giao hàng (CAP-HUMAN-01, DD-F022 §2.4)", "reason": "Chưa có API / cột; tạm ghi tên người xác nhận vào resolution — chờ quyết định (xem spec_gaps)."}
+  ],
+  "spec_gaps": [
+    {"spec": "FN-correction-decide_correction bước 20 ↔ FN-incentive-record_incentive_delta", "gap": "decide_correction gọi thẳng record_incentive_delta, trong khi FN record_incentive_delta quy định hàm nguồn không gọi (delta sinh lúc 試算 kỳ nhận, dưới khóa kỳ). Giữ cả hai sẽ sinh delta 2 lần hoặc delta vào kỳ chưa khóa.", "proposal": "sửa thiết kế", "note": "E06-10c bỏ bước 20, thay bằng lấy khóa shared incentive_period (E07-06c). Cần sửa FN decide_correction."},
+    {"spec": "DD-F022 §3.2 ↔ TBL-dispute_notes, DSP-05, FN-dispute-dispute_update", "gap": "DD nói không có bảng ghi chú riêng (ghi chú = dòng audit), nhưng DB đã thêm dispute_notes (No.47), API DSP-05 và FN ghi vào bảng đó.", "proposal": "sửa thiết kế", "note": "Backlog theo DB / FN; cập nhật DD-F022."},
+    {"spec": "DD-F022 §2.4 (CAP-HUMAN-01, ma trận F-017)", "gap": "Tranh chấp liên quan giao hàng cần ROLE-006 xác nhận hoàn tất nhưng không có API, cột hay trạng thái nào.", "proposal": "issue làm rõ", "note": "Hỏi khách bước xác nhận có bắt buộc trong hệ thống không; nếu có → thêm cột confirmed_by + API (CR nhỏ)."},
+    {"spec": "DD-F019 §1.4 ↔ API-LIST CLS-01 / CLS-02", "gap": "DD-F019 ghi CLS-01 chỉ ROLE-005 / 006 và coi ROLE-010 / 011 là câu hỏi mở; API list đã chốt ROLE-010 / 011 chỉ xem.", "proposal": "sửa thiết kế", "note": "Backlog theo API list; sửa câu trong DD-F019."},
+    {"spec": "FN-closing-unlock_business_day bước 6 ↔ TBL-notification_settings CHECK", "gap": "Event type business_day_unlocked được dùng nhưng chưa có trong CHECK notification_settings_event_type_check → notify_event sẽ cảnh báo và bỏ qua.", "proposal": "sửa thiết kế", "note": "Thêm event type + dòng seed cấu hình (E08-02) hoặc bỏ thông báo."},
+    {"spec": "SCREEN-LIST SCR-026 (Device PC) ↔ DD-F022 (PC + Tablet)", "gap": "Screen list ghi PC, DD quyết định PC + Tablet vì ROLE-004 ở hiện trường.", "proposal": "giả định", "note": "E06-20 làm bố cục dùng được ở tablet ngang; cập nhật screen list."},
+    {"spec": "OQ-20 (ROLE-005 xem phiếu người khác lập)", "gap": "Phạm vi xem COR-03 / COR-04 của ROLE-005 phụ thuộc câu trả lời khách.", "proposal": "để mở", "note": "E06-11 làm theo giả định chỉ phiếu của mình, tách điều kiện lọc thành 1 chỗ để đổi nhanh."}
+  ]
+}

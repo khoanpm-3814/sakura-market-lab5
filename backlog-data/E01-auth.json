@@ -1,0 +1,508 @@
+{
+  "epic": "E01",
+  "title": "Đăng nhập & phân quyền",
+  "f_ids": [
+    "F-001",
+    "F-002"
+  ],
+  "summary": "Đăng nhập phía server có khóa tạm 5 lần / 15 phút, MFA TOTP cho ROLE-006〜009 và OTP email cho ROLE-012, timeout phiên theo vai trò, thông tin phiên / menu; quản trị tài khoản và vai trò của ROLE-009 (SCR-035) có lịch sử. Guard dùng chung đã ở E00-07.",
+  "constraint": null,
+  "issues": [
+    {
+      "key": "E01-01",
+      "title": "Hiện thực đăng nhập mật khẩu có đếm sai và khóa tạm (AUTH-01)",
+      "discipline": "BE",
+      "description": "Đăng nhập chạy ở server qua Supabase Auth, thứ tự kiểm is_active → is_locked → locked_until → mật khẩu → vai trò → chính sách MFA; ghi kết quả bằng hàm DB khóa dòng profiles để không đếm sai khi song song.",
+      "acceptance": [
+        "Toàn bộ test viewpoint No.1〜4, 6, 12, 13 của DD-F001 đạt"
+      ],
+      "spec_refs": [
+        "F-001",
+        "DD-F001-login-mfa-lockout",
+        "AUTH-01",
+        "FN-auth-auth_record_login_result"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — giờ ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E00-07",
+        "E00-03a"
+      ],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E01-01a",
+          "title": "Viết hàm auth_record_login_result (đếm sai, khóa 15 phút, audit)",
+          "discipline": "DB",
+          "description": "Hàm PL/pgSQL khóa profiles FOR UPDATE: sai → failed_login_count + 1 (đặt lại khi khóa cũ đã hết), lần 5 → locked_until = now + 15 phút và phát sự kiện security_event; đúng → reset bộ đếm, last_login_at. Ghi audit auth.login / auth.lockout cùng transaction, không ghi mật khẩu. Ngưỡng / thời gian khóa là tham số.",
+          "acceptance": [
+            "2 lần gọi sai song song khi bộ đếm = 4 → đúng 1 lần khóa, bộ đếm = 5",
+            "Sau khi locked_until qua, lần sai kế tiếp tính đúng theo quy tắc DD-F001 §2.4",
+            "Đúng mật khẩu → failed_login_count = 0, locked_until NULL",
+            "pgTAP cho các nhánh và kiểm audit không chứa mật khẩu"
+          ],
+          "spec_refs": [
+            "FN-auth-auth_record_login_result",
+            "TBL-profiles",
+            "TBL-audit_logs",
+            "DD-F001-login-mfa-lockout"
+          ],
+          "hours": 8,
+          "hours_basis": "3 nhánh đếm + tương tranh FOR UPDATE + phát sự kiện bảo mật.",
+          "priority": "must",
+          "depends_on": [
+            "E00-02a",
+            "E00-03a"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E01-01b",
+          "title": "Viết route AUTH-01 POST /api/auth/login",
+          "discipline": "BE",
+          "description": "Validate email (trim, lower) / mật khẩu, kiểm trạng thái tài khoản theo thứ tự, gọi signInWithPassword ở server, gọi auth_record_login_result, trả roles hiệu lực + mfa_required + auth_policy + session_timeout_minutes và cookie aal1. Email không tồn tại trả cùng M_COM_02, không tăng bộ đếm.",
+          "acceptance": [
+            "Email không tồn tại và sai mật khẩu đều 401 M_COM_02, thời gian phản hồi xấp xỉ",
+            "Đang khóa: mật khẩu đúng vẫn 401 M_COM_03 với số phút còn lại làm tròn lên",
+            "is_active false → 403 M_COM_24 (không tăng bộ đếm); is_locked → 403 M_AUTH_02; không vai trò → 403 M_AUTH_03; ROLE-012 thiếu participant_id → 403 M_AUTH_04",
+            "Auth không phản hồi → 503 M_COM_27",
+            "Vitest phủ các nhánh"
+          ],
+          "spec_refs": [
+            "AUTH-01",
+            "DD-F001-login-mfa-lockout",
+            "COMMON-SPEC",
+            "TBL-roles",
+            "TBL-user_roles"
+          ],
+          "hours": 8,
+          "hours_basis": "7 nhánh lỗi theo thứ tự cố định + tích hợp Supabase Auth phía server.",
+          "priority": "must",
+          "depends_on": [
+            "E01-01a",
+            "E00-08"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    },
+    {
+      "key": "E01-02",
+      "title": "Hiện thực MFA TOTP cho ROLE-006〜009 (AUTH-02 / AUTH-03 / AUTH-04)",
+      "discipline": "BE",
+      "description": "Đăng ký TOTP lần đầu (QR + secret, không cache), tạo challenge, xác minh mã 6 số nâng phiên lên aal2 qua Supabase Auth MFA; sai mã tính chung bộ đếm với AUTH-01 (gọi auth_record_login_result), lần 5 hủy phiên aal1; phiên aal1 quá 5 phút ở bước MFA → M_18. Hủy factor chưa xác minh khi bỏ dở.",
+      "acceptance": [
+        "AUTH-02 khi đã có factor verified → 409 M_AUTH_50",
+        "AUTH-03 chưa có factor → 409 M_COM_17",
+        "Sai 3 mật khẩu, đúng mật khẩu, rồi sai TOTP 5 lần → khóa ở lần TOTP thứ 5 (viewpoint No.5)",
+        "Vai trò ngoài ROLE-006〜009 / ROLE-012 gọi → 403 M_19",
+        "Audit auth.mfa.* không chứa mã hay secret"
+      ],
+      "spec_refs": [
+        "F-001",
+        "AUTH-02",
+        "AUTH-03",
+        "AUTH-04",
+        "DD-F001-login-mfa-lockout",
+        "FN-auth-auth_record_login_result"
+      ],
+      "hours": 12,
+      "hours_basis": "3 API + vòng đời factor Supabase + đếm chung khóa tạm + hết hạn bước MFA.",
+      "priority": "must",
+      "depends_on": [
+        "E01-01b"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E01-03",
+      "title": "Hiện thực OTP email cho ROLE-012 (nhánh email_otp của AUTH-03 / AUTH-04)",
+      "discipline": "BE",
+      "description": "Gửi OTP qua signInWithOtp (không tạo user mới) bằng SMTP tùy chỉnh; cooldown 60 giây, tối đa 3 lần gửi lại / lượt đăng nhập, đếm từ audit auth.otp.send kể từ lần auth.login 成功 gần nhất; OTP hiệu lực 10 phút; xác minh sai tính chung bộ đếm khóa tạm. Cấu hình SMTP tùy chỉnh cho Supabase Auth trong từng môi trường.",
+      "acceptance": [
+        "Gửi lại sau 30 giây → 422 M_AUTH_06; lần gửi lại thứ 4 → 422 M_AUTH_07 và hủy phiên aal1",
+        "Email hiển thị đã che trong response",
+        "Phiên ROLE-012 không có amr otp gọi API nghiệp vụ → 401 M_COM_06",
+        "Vitest cho cooldown / giới hạn dựa trên dữ liệu audit"
+      ],
+      "spec_refs": [
+        "F-001",
+        "AUTH-03",
+        "AUTH-04",
+        "DD-F001-login-mfa-lockout",
+        "TBL-audit_logs",
+        "PREMISE"
+      ],
+      "hours": 8,
+      "hours_basis": "2 quy tắc giới hạn gửi + đếm từ audit + cấu hình SMTP Auth.",
+      "priority": "must",
+      "depends_on": [
+        "E01-01b"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E01-04",
+      "title": "Hiện thực timeout phiên theo vai trò và giới hạn 12 giờ",
+      "discipline": "BE",
+      "description": "Middleware giữ thời điểm thao tác cuối trong cookie ký HMAC; timeout = min session_timeout_minutes của các vai trò hiệu lực (30 / 15 / 10 phút); request do người dùng thao tác mới gia hạn, AUTH-05 / polling không gia hạn; quá idle hoặc quá 12 giờ kể từ đăng nhập → 401 M_18 + ghi audit. Giá trị là tham số cấu hình.",
+      "acceptance": [
+        "ROLE-003 idle 31 phút, ROLE-006 idle 16 phút, ROLE-012 idle 11 phút đều 401 M_18",
+        "Người giữ ROLE-005 + ROLE-006 dùng 15 phút",
+        "Thao tác liên tục 12 giờ 1 phút → 401 M_18",
+        "Cookie bị sửa → coi như hết phiên",
+        "Vitest với đồng hồ giả"
+      ],
+      "spec_refs": [
+        "F-001",
+        "DD-F001-login-mfa-lockout",
+        "COMMON-SPEC",
+        "TBL-roles",
+        "FN-common-requireApiUser"
+      ],
+      "hours": 8,
+      "hours_basis": "Tính min theo nhiều vai trò + cookie ký + phân biệt request có / không gia hạn.",
+      "priority": "must",
+      "depends_on": [
+        "E00-07"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E01-05",
+      "title": "Viết AUTH-05 thông tin phiên / menu / 業務日 và AUTH-06 đăng xuất",
+      "discipline": "BE",
+      "description": "AUTH-05 trả user, roles, menu (hợp menu các vai trò theo README §3; ROLE-012 chỉ SCR-008, SCR-003), biz_date + status + is_holiday từ getBusinessDay, session_expires_at. AUTH-06 signOut phạm vi thiết bị, xóa cookie, hủy factor chưa xác minh khi hủy bước MFA, audit auth.logout, idempotent.",
+      "acceptance": [
+        "Menu mỗi vai trò khớp bảng README §3 (test cho 12 vai trò + 1 tổ hợp)",
+        "Ngày chưa có trong lịch → biz_date NULL, không lỗi",
+        "AUTH-05 không gia hạn idle timeout",
+        "AUTH-06 gọi 2 lần đều 200"
+      ],
+      "spec_refs": [
+        "F-001",
+        "F-020",
+        "AUTH-05",
+        "AUTH-06",
+        "FN-common-getBusinessDay",
+        "SCREEN-LIST"
+      ],
+      "hours": 4,
+      "hours_basis": "2 API đọc / đơn giản, menu là bảng cấu hình.",
+      "priority": "must",
+      "depends_on": [
+        "E00-07",
+        "E00-10",
+        "E01-04"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E01-06",
+      "title": "Dựng màn SCR-001 đăng nhập gồm bước MFA / OTP",
+      "discipline": "FE",
+      "description": "Form email + mật khẩu, bước đăng ký TOTP (QR, M_COM_26 / M_AUTH_08 / M_AUTH_09), bước nhập mã TOTP, bước OTP email (gửi lại có đếm ngược 60 giây), thông báo khóa tạm / ngưng, lý do timeout (M_18), redirect next theo quyền (CS-01, CS-05); không có link quên mật khẩu (M_AUTH_01). PC + tablet.",
+      "acceptance": [
+        "Đủ các trạng thái màn trong SCR-001, mỗi lỗi API hiển thị đúng message ID",
+        "Sau đăng nhập về next nếu vai trò được phép, ngược lại về trang đầu theo vai trò; ROLE-012 về SCR-008",
+        "Thao tác hoàn toàn bằng bàn phím (CS-09); tablet vùng chạm ≥ 44 px",
+        "Test component cho chuyển bước"
+      ],
+      "spec_refs": [
+        "SCR-001",
+        "F-001",
+        "AUTH-01",
+        "AUTH-02",
+        "AUTH-03",
+        "AUTH-04",
+        "COMMON-SPEC"
+      ],
+      "hours": 12,
+      "hours_basis": "4 bước màn + nhánh TOTP / OTP + nhiều thông báo lỗi.",
+      "priority": "must",
+      "depends_on": [
+        "E00-12b",
+        "E00-12d",
+        "E01-02",
+        "E01-03"
+      ],
+      "constraint": null,
+      "sub_issues": []
+    },
+    {
+      "key": "E01-07",
+      "title": "Hiện thực quản trị tài khoản & vai trò ROLE-009 (F-002, SCR-035)",
+      "discipline": "BE",
+      "description": "Tạo tài khoản, cấp / thu hồi vai trò có lịch sử, ngưng / khôi phục, khóa / mở khóa, mở khóa tạm, reset MFA, đặt lại mật khẩu, xem lịch sử; ROLE-011 chỉ xem.",
+      "acceptance": [
+        "Toàn bộ test viewpoint No.1〜8 của DD-F002 và No.14 của DD-F001 đạt"
+      ],
+      "spec_refs": [
+        "F-002",
+        "DD-F002-account-participant-self-view",
+        "SCR-035"
+      ],
+      "hours": null,
+      "hours_basis": "Issue cha — giờ ở sub-issue.",
+      "priority": "must",
+      "depends_on": [
+        "E00-07",
+        "E00-03a"
+      ],
+      "constraint": null,
+      "sub_issues": [
+        {
+          "key": "E01-07a",
+          "title": "Viết create_user_account + USR-02 tạo tài khoản (rollback auth user khi lỗi)",
+          "discipline": "BE",
+          "description": "Route tạo auth user bằng Admin API rồi gọi hàm DB create_user_account (insert profiles email lower + user_roles granted_by / granted_at + audit account.create); lỗi DB → xóa auth user. Kiểm chính sách mật khẩu 10〜72 có hoa / thường / số, ROLE-012 bắt buộc participant_id và không kèm vai trò khác, email trùng.",
+          "acceptance": [
+            "Tạo ROLE-005 + ROLE-006 → 201, 2 dòng user_roles",
+            "ROLE-012 + ROLE-003 → 422 M_USR_50; ROLE-012 thiếu participant → 400 M_USR_51",
+            "Email trùng → 422 M_10",
+            "Ép lỗi DB sau khi tạo auth user → auth user bị xóa, không có profile mồ côi",
+            "pgTAP + Vitest"
+          ],
+          "spec_refs": [
+            "USR-02",
+            "FN-account-create_user_account",
+            "TBL-profiles",
+            "TBL-user_roles",
+            "DD-F002-account-participant-self-view"
+          ],
+          "hours": 12,
+          "hours_basis": "Giao dịch bù trừ giữa Auth và DB + 5 quy tắc kiểm.",
+          "priority": "must",
+          "depends_on": [
+            "E00-07",
+            "E00-03a"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E01-07b",
+          "title": "Viết update_user_account + reset_login_lock (đổi vai trò, ngưng, khóa, mở khóa tạm)",
+          "discipline": "DB",
+          "description": "Hàm update_user_account: profiles FOR UPDATE, so updated_at, chặn tự ngưng / tự khóa / tự bỏ ROLE-009, so tập vai trò mong muốn với dòng đang hiệu lực (thiếu → insert, thừa → revoked_by / revoked_at / revoke_reason, không xóa dòng), is_active / is_locked + locked_reason; mở khóa tạm gọi reset_login_lock (failed_login_count = 0, locked_until NULL). Audit từng thay đổi với log_category 権限 / セキュリティ, phát security_event khi khóa / mở khóa.",
+          "acceptance": [
+            "Bỏ ROLE-006 kèm lý do → dòng cũ có revoked_at, revoke_reason, không bị xóa",
+            "Tự ngưng / tự khóa → M_USR_52; tự bỏ ROLE-009 → M_USR_53",
+            "Tập vai trò rỗng → M_USR_06; không có thay đổi → 422",
+            "updated_at lệch → CONFLICT (409)",
+            "pgTAP cho mọi nhánh + kiểm số dòng audit"
+          ],
+          "spec_refs": [
+            "FN-account-update_user_account",
+            "FN-account-reset_login_lock",
+            "TBL-user_roles",
+            "TBL-profiles",
+            "DD-F002-account-participant-self-view"
+          ],
+          "hours": 12,
+          "hours_basis": "So sánh tập vai trò + 6 loại thay đổi trạng thái + audit chi tiết.",
+          "priority": "must",
+          "depends_on": [
+            "E00-02a",
+            "E00-03a"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E01-07c",
+          "title": "Viết route USR-03 PATCH /api/admin/users/{id} kèm ban / unban Supabase Auth",
+          "discipline": "BE",
+          "description": "Validate body (user_roles, revoke_reason, is_active, is_locked + locked_reason, unlock_temporary, updated_at), gọi update_user_account; sau commit ngưng / khóa → ban + signOut toàn cục, khôi phục → unban. Guard đọc user_roles mỗi request nên thu hồi có hiệu lực ngay.",
+          "acceptance": [
+            "Ngưng tài khoản đang có phiên → request kế tiếp của người đó 403 M_COM_24",
+            "Thu hồi thiếu revoke_reason / khóa thiếu locked_reason → 400 M_01",
+            "2 ROLE-009 sửa cùng lúc → người sau 409 M_COM_17",
+            "ROLE-011 gọi → 403",
+            "Vitest với mock Admin API"
+          ],
+          "spec_refs": [
+            "USR-03",
+            "FN-account-update_user_account",
+            "DD-F002-account-participant-self-view"
+          ],
+          "hours": 4,
+          "hours_basis": "Route mỏng, logic ở hàm DB; thêm bước gọi Admin API sau commit.",
+          "priority": "must",
+          "depends_on": [
+            "E01-07b",
+            "E00-08"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E01-07d",
+          "title": "Viết USR-06 đặt lại mật khẩu và USR-05 reset MFA",
+          "discipline": "BE",
+          "description": "USR-06: transaction DB (profiles FOR UPDATE, reset bộ đếm qua reset_login_lock, audit password.reset) rồi Admin API đặt mật khẩu + signOut toàn cục; không gỡ is_locked / is_active; mật khẩu không vào audit / log / error_extra. USR-05: xóa factor TOTP + lý do bắt buộc, không tự reset của mình, chỉ cho người có vai trò MFA.",
+          "acceptance": [
+            "Mật khẩu vi phạm chính sách → 400 M_12",
+            "Sau USR-06 mọi phiên cũ của người đó bị thu hồi",
+            "Tự reset MFA → 422 M_USR_55; người không có vai trò MFA → 422 M_USR_54",
+            "Grep audit / log không thấy mật khẩu"
+          ],
+          "spec_refs": [
+            "USR-05",
+            "USR-06",
+            "FN-account-reset_login_lock",
+            "DD-F001-login-mfa-lockout"
+          ],
+          "hours": 8,
+          "hours_basis": "2 API, mỗi API có bước DB + bước Admin API sau commit.",
+          "priority": "must",
+          "depends_on": [
+            "E01-07b"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E01-07e",
+          "title": "Viết USR-01 danh sách tài khoản, USR-04 lịch sử, USR-07 danh sách nhân viên",
+          "discipline": "BE",
+          "description": "USR-01 lọc vai trò / trạng thái / từ khóa, trả vai trò hiệu lực + is_active / is_locked / locked_until (ROLE-009, ROLE-011 xem). USR-04 dòng audit 権限 / セキュリティ trước / sau + mọi dòng user_roles kể cả đã thu hồi. USR-07 id, display_name, role_code người dùng nội bộ đang hoạt động, không email, không ROLE-012.",
+          "acceptance": [
+            "ROLE-011 gọi USR-01 / USR-04 → 200; gọi USR-07 → 200 không có email",
+            "USR-04 hiện before / after của lần thu hồi vai trò",
+            "Phân trang theo CS-20"
+          ],
+          "spec_refs": [
+            "USR-01",
+            "USR-04",
+            "USR-07",
+            "DD-F002-account-participant-self-view"
+          ],
+          "hours": 8,
+          "hours_basis": "3 API đọc có lọc / phân trang, 1 API ghép 2 nguồn dữ liệu.",
+          "priority": "must",
+          "depends_on": [
+            "E00-07",
+            "E00-03a"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E01-07f",
+          "title": "Dựng SCR-035: danh sách, tạo tài khoản, sửa vai trò / trạng thái",
+          "discipline": "FE",
+          "description": "Bảng tài khoản + bộ lọc, dialog tạo (vai trò nhiều chọn, participant khi có ROLE-012), panel sửa vai trò với lý do thu hồi, ngưng / khôi phục, khóa / mở khóa, mở khóa tạm, xác nhận M_USR_08〜12; ROLE-011 chế độ chỉ xem.",
+          "acceptance": [
+            "Đủ hành vi và message ID theo SCR-035",
+            "ROLE-011 không thấy nút ghi",
+            "Lỗi 409 hiển thị dialog tải lại (CS-17)",
+            "Test component cho dialog tạo và sửa vai trò"
+          ],
+          "spec_refs": [
+            "SCR-035",
+            "USR-01",
+            "USR-02",
+            "USR-03",
+            "USR-07"
+          ],
+          "hours": 12,
+          "hours_basis": "Màn quản trị nhiều dialog, nhiều quy tắc ràng buộc vai trò.",
+          "priority": "must",
+          "depends_on": [
+            "E00-12a",
+            "E00-12c",
+            "E01-07a",
+            "E01-07c",
+            "E01-07e"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        },
+        {
+          "key": "E01-07g",
+          "title": "Dựng SCR-035: lịch sử thay đổi, reset MFA, đặt lại mật khẩu",
+          "discipline": "FE",
+          "description": "Tab lịch sử (USR-04) hiển thị trước / sau, người, thời điểm; dialog reset MFA có lý do; dialog đặt lại mật khẩu kiểm chính sách phía client, xác nhận M_USR_13, không giữ mật khẩu trong state sau khi gửi.",
+          "acceptance": [
+            "Lịch sử hiển thị cả vai trò đã thu hồi",
+            "Kiểm chính sách mật khẩu client dùng cùng message ID với server",
+            "Test component 2 dialog"
+          ],
+          "spec_refs": [
+            "SCR-035",
+            "USR-04",
+            "USR-05",
+            "USR-06"
+          ],
+          "hours": 8,
+          "hours_basis": "1 tab đọc + 2 dialog ghi.",
+          "priority": "must",
+          "depends_on": [
+            "E01-07f",
+            "E01-07d"
+          ],
+          "constraint": null,
+          "sub_issues": []
+        }
+      ]
+    }
+  ],
+  "spec_not_issued": [
+    {
+      "spec": "Guard requireApiUser, middleware phiên, ma trận vai trò (FN-common-requireApiUser)",
+      "reason": "Đã làm ở E00-07 vì mọi epic dùng; E01 chỉ thêm timeout (E01-04)."
+    },
+    {
+      "spec": "Thông báo security_event tới ROLE-009 trong 5 phút (DD-F001 §2.3)",
+      "reason": "Hàm notify_event và job gửi thuộc E08; E01 chỉ gọi notify_event."
+    },
+    {
+      "spec": "Cảnh báo sự kiện bảo mật bất thường (403 > 20 lần / 5 phút, thao tác quản trị ngoài giờ)",
+      "reason": "Thuộc ops_watchdog F-034 → E11."
+    },
+    {
+      "spec": "Màn quên / đổi mật khẩu tự phục vụ",
+      "reason": "Không có trong 37 F; chờ khách trả lời OQ-15, nếu cần là CR."
+    }
+  ],
+  "spec_gaps": [
+    {
+      "spec": "ARCH-OVERVIEW §8 vs USR-02 / USR-06 / DD-F001 §5",
+      "gap": "Kiến trúc ghi chính sách mật khẩu ≥ 10 ký tự có chữ và số; API / DD ghi 10〜72 có hoa / thường / số và khác email.",
+      "proposal": "sửa thiết kế",
+      "note": "Làm theo API / DD (chặt hơn), sửa ARCH-OVERVIEW §8 cho khớp."
+    },
+    {
+      "spec": "DD-F001 §2.4",
+      "gap": "Sau khi hết khóa, bộ đếm không tự reset nên lần sai kế tiếp khóa lại ngay (5 → khóa); DD tự ghi đây là câu hỏi mở nhưng chưa có trong open-questions.md.",
+      "proposal": "issue làm rõ",
+      "note": "Thêm vào OQ (gộp OQ-01). Tạm giữ hành vi DD, tham số hóa để đổi không cần sửa code."
+    },
+    {
+      "spec": "DD-F002 §2 / §3 bảng lỗi",
+      "gap": "Lỗi 「không có thay đổi」 của USR-03 / PTY-04 dùng Message ID M_LOT_17 thuộc danh mục ロット.",
+      "proposal": "sửa thiết kế",
+      "note": "Đề xuất cấp mã chung M_COM_xx trong common-message-list; tạm dùng M_LOT_17 như spec."
+    },
+    {
+      "spec": "DD-F002 §1 Detail 1, §2 Detail 1",
+      "gap": "DD ghi create_user_account / update_user_account là 「dự kiến」 trong khi FN-LIST v1.1 đã có function spec (No.81, 82).",
+      "proposal": "sửa thiết kế",
+      "note": "Chỉ cập nhật chữ ở DD; backlog dùng FN đã có."
+    },
+    {
+      "spec": "COMMON-SPEC CS-02 vs DD-F001 §1",
+      "gap": "CS-02 nói dữ liệu form chưa lưu không giữ khi hết phiên, nhưng không nói [延長] gọi API nào; DD nói 「1 API bất kỳ có thao tác」 — chưa có endpoint chuẩn để gia hạn.",
+      "proposal": "giả định",
+      "note": "Dùng AUTH-05 với cờ gia hạn hoặc thêm endpoint keep-alive; cần PL chốt khi làm E01-04 / E00-12a."
+    }
+  ]
+}

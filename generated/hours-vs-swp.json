@@ -1,0 +1,39 @@
+{
+ "overall_median": 1.6,
+ "medians": {
+  "FE": 2.4,
+  "BE": 1.6,
+  "QA": 1.3333333333333333,
+  "DB": 1.55,
+  "INFRA": 1.6
+ },
+ "outliers": [
+  {
+   "key": "E05-12",
+   "disc": "DB",
+   "hours": 2,
+   "swp": 3,
+   "ratio": 0.6666666666666666,
+   "title": "Bổ sung event_type delivery_exception / sync_conflict vào CHECK và cấu hình thông báo",
+   "median": 1.55
+  },
+  {
+   "key": "E07-06b",
+   "disc": "BE",
+   "hours": 4,
+   "swp": 1,
+   "ratio": 4.0,
+   "title": "Xác định cause_type và cause_note của delta",
+   "median": 1.6
+  },
+  {
+   "key": "E11-05",
+   "disc": "DB",
+   "hours": 2,
+   "swp": 3,
+   "ratio": 0.6666666666666666,
+   "title": "Viết hàm job sync_operations_purge",
+   "median": 1.55
+  }
+ ]
+}
