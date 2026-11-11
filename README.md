@@ -19,7 +19,7 @@
 | Báo cáo HTML của skill chấm SWP (trong repo) | [reports/estimate-swp-sakura-market-lab5-20261111.html](reports/estimate-swp-sakura-market-lab5-20261111.html) |
 | Bản xem trực tiếp qua GitHub Pages | https://khoanpm-3814.github.io/sakura-market-lab5/reports/estimate-swp-sakura-market-lab5-20261111.html |
 
-Kiểm tra truy cập không đăng nhập (2026-11-11): repo, Project và trang báo cáo đều trả HTTP 200 khi gọi không kèm token. ⏳ Mở thử bằng cửa sổ ẩn danh: chờ học viên xác nhận.
+Kiểm tra truy cập không đăng nhập (2026-11-11): repo, Project và trang báo cáo đều trả HTTP 200 khi gọi không kèm token. Học viên đã mở thử cả 3 link bằng cửa sổ ẩn danh (2026-11-11): đều xem được, không cần đăng nhập.
 
 Trên Project, các field dùng để chấm: **Status** (Todo / In Progress / In Review / Done), **Iteration** (Sprint 1〜10), **Phụ trách (giả định)** (TL / BE-1 / BE-2 / FE-1 / FE-2 / QA-1), **SWP** (điểm đã qua review của skill), **Giờ ước lượng**, **Loại** (Epic / Issue / Sub-issue). Quan hệ epic → issue → sub-issue dùng sub-issue gốc của GitHub.
 
